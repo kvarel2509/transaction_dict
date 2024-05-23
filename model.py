@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import abc
 import dataclasses
-from functools import lru_cache
+import uuid
 from typing import Any
 from collections import deque
 
@@ -88,22 +88,51 @@ class JournalStaff:
 class JournalWriteAccessManager:
     def __init__(self, journal: Journal) -> None:
         self._journal = journal
+        self._journal_writers = [self._create_journal_writer()]
+        self._candidates = deque()
 
     def get_journal_writer(self) -> JournalWriter:
-        ...
+        candidate_identifier = self._create_candidate_identifier()
+        self._candidates.append(candidate_identifier)
+        self._wait_your_turn(candidate_identifier)
+        journal_writer = self._execute_journal_writer()
+        self._candidates.popleft()
+        return journal_writer
 
-    def create_journal_writer(self) -> JournalWriter:
+    def revert_journal_writer(self, journal_writer: JournalWriter):
+        self._journal_writers.append(journal_writer)
+
+    def _create_journal_writer(self) -> JournalWriter:
         return JournalWriter(self._journal)
+
+    def _create_candidate_identifier(self) -> uuid.UUID:
+        return uuid.uuid4()
+
+    def _execute_journal_writer(self) -> JournalWriter:
+        journal_writer = None
+        while not journal_writer:
+            try:
+                journal_writer = self._journal_writers.pop()
+            except IndexError:
+                pass
+        return journal_writer
+
+    def _wait_your_turn(self, candidate_identifier: uuid.UUID) -> None:
+        while self._candidates.index(candidate_identifier) > 0:
+            pass
 
 
 class JournalReadAccessManager:
     def __init__(self, journal: Journal) -> None:
         self._journal = journal
+        self._journal_reader = self.create_journal_reader()
 
     def get_journal_reader(self) -> JournalReader:
-        return self.create_journal_reader()
+        return self._journal_reader
 
-    @lru_cache
+    def revert_journal_reader(self, journal_reader: JournalReader):
+        pass
+
     def create_journal_reader(self) -> JournalReader:
         return JournalReader(journal=self._journal)
 
@@ -111,20 +140,63 @@ class JournalReadAccessManager:
 class JournalStaffAccessManager:
     def __init__(self, journal: Journal) -> None:
         self._journal = journal
+        self._journal_staff = self.create_journal_staff()
+
+    def get_journal_staff(self) -> JournalStaff:
+        return self._journal_staff
+
+    def revert_journal_staff(self, journal_staff: JournalStaff):
+        pass
+
+    def create_journal_staff(self) -> JournalStaff:
+        return JournalStaff(journal=self._journal)
 
 
 class JournalAccessManager:
     def __init__(
             self,
-            journal: Journal,
             journal_write_access_manager: JournalWriteAccessManager,
             journal_read_access_manager: JournalReadAccessManager,
             journal_staff_access_manager: JournalStaffAccessManager
     ) -> None:
-        self._journal = journal
         self._journal_write_access_manager = journal_write_access_manager
         self._journal_read_access_manager = journal_read_access_manager
         self._journal_staff_access_manager = journal_staff_access_manager
+
+    def get_journal_writer(self) -> JournalWriter:
+        return self._journal_write_access_manager.get_journal_writer()
+
+    def revert_journal_writer(self, journal_writer: JournalWriter) -> None:
+        self._journal_write_access_manager.revert_journal_writer(journal_writer=journal_writer)
+
+    def get_journal_reader(self) -> JournalReader:
+        return self._journal_read_access_manager.get_journal_reader()
+
+    def revert_journal_reader(self, journal_reader: JournalReader) -> None:
+        self._journal_read_access_manager.revert_journal_reader(journal_reader=journal_reader)
+
+    def get_journal_staff(self) -> JournalStaff:
+        return self._journal_staff_access_manager.get_journal_staff()
+
+    def revert_journal_staff(self, journal_staff: JournalStaff) -> None:
+        self._journal_staff_access_manager.revert_journal_staff(journal_staff=journal_staff)
+
+
+class Transaction(abc.ABC):
+    def __enter__(self):
+        self._writers = {}
+        self._readers = {}
+
+    def __exit__(self, *args, **kwargs):
+        ...
+
+    @abc.abstractmethod
+    def __getitem__(self, item):
+        ...
+
+    @abc.abstractmethod
+    def __setitem__(self, key, value):
+        ...
 
 
 class TransDict:
