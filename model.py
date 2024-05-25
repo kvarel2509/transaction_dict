@@ -3,12 +3,8 @@ from __future__ import annotations
 import abc
 import dataclasses
 import uuid
-from typing import Any
+from typing import Any, Hashable
 from collections import deque
-
-
-class Deleted:
-    pass
 
 
 @dataclasses.dataclass
@@ -86,46 +82,35 @@ class JournalStaff:
 
 
 class JournalWriteAccessManager:
-    def __init__(self, journal: Journal) -> None:
-        self._journal = journal
-        self._journal_writers = [self._create_journal_writer()]
+    def __init__(self, journal_writers: list[JournalWriter]) -> None:
+        self._journal_writers = journal_writers
         self._candidates = deque()
 
     def get_journal_writer(self) -> JournalWriter:
-        candidate_identifier = self._create_candidate_identifier()
-        self._candidates.append(candidate_identifier)
-        self._wait_your_turn(candidate_identifier)
         journal_writer = self._execute_journal_writer()
-        self._candidates.popleft()
         return journal_writer
 
     def revert_journal_writer(self, journal_writer: JournalWriter):
         self._journal_writers.append(journal_writer)
 
-    def _create_journal_writer(self) -> JournalWriter:
-        return JournalWriter(self._journal)
-
-    def _create_candidate_identifier(self) -> uuid.UUID:
-        return uuid.uuid4()
-
     def _execute_journal_writer(self) -> JournalWriter:
-        journal_writer = None
-        while not journal_writer:
+        candidate_identifier = uuid.uuid4()
+        self._candidates.append(candidate_identifier)
+        while self._candidates.index(candidate_identifier) > 0:
+            continue
+        while True:
             try:
                 journal_writer = self._journal_writers.pop()
             except IndexError:
-                pass
-        return journal_writer
-
-    def _wait_your_turn(self, candidate_identifier: uuid.UUID) -> None:
-        while self._candidates.index(candidate_identifier) > 0:
-            pass
+                continue
+            else:
+                self._candidates.popleft()
+                return journal_writer
 
 
 class JournalReadAccessManager:
-    def __init__(self, journal: Journal) -> None:
-        self._journal = journal
-        self._journal_reader = self.create_journal_reader()
+    def __init__(self, journal_reader: JournalReader) -> None:
+        self._journal_reader = journal_reader
 
     def get_journal_reader(self) -> JournalReader:
         return self._journal_reader
@@ -133,14 +118,10 @@ class JournalReadAccessManager:
     def revert_journal_reader(self, journal_reader: JournalReader):
         pass
 
-    def create_journal_reader(self) -> JournalReader:
-        return JournalReader(journal=self._journal)
-
 
 class JournalStaffAccessManager:
-    def __init__(self, journal: Journal) -> None:
-        self._journal = journal
-        self._journal_staff = self.create_journal_staff()
+    def __init__(self, journal_staff: JournalStaff) -> None:
+        self._journal_staff = journal_staff
 
     def get_journal_staff(self) -> JournalStaff:
         return self._journal_staff
@@ -148,76 +129,130 @@ class JournalStaffAccessManager:
     def revert_journal_staff(self, journal_staff: JournalStaff):
         pass
 
-    def create_journal_staff(self) -> JournalStaff:
-        return JournalStaff(journal=self._journal)
+
+@dataclasses.dataclass
+class JournalAccessManagerSet:
+    journal_write_access_manager: JournalWriteAccessManager
+    journal_read_access_manager: JournalReadAccessManager
+    journal_staff_access_manager: JournalStaffAccessManager
 
 
-class JournalAccessManager:
-    def __init__(
-            self,
-            journal_write_access_manager: JournalWriteAccessManager,
-            journal_read_access_manager: JournalReadAccessManager,
-            journal_staff_access_manager: JournalStaffAccessManager
-    ) -> None:
-        self._journal_write_access_manager = journal_write_access_manager
-        self._journal_read_access_manager = journal_read_access_manager
-        self._journal_staff_access_manager = journal_staff_access_manager
+class AccessManager:
+    def __init__(self):
+        self._journal_access_manager_set: dict[Hashable, JournalAccessManagerSet] = {}
 
-    def get_journal_writer(self) -> JournalWriter:
-        return self._journal_write_access_manager.get_journal_writer()
+    def get_journal_reader(self, key) -> JournalReader:
+        journal_access_manager_set = self._journal_access_manager_set[key]
+        return journal_access_manager_set.journal_read_access_manager.get_journal_reader()
 
-    def revert_journal_writer(self, journal_writer: JournalWriter) -> None:
-        self._journal_write_access_manager.revert_journal_writer(journal_writer=journal_writer)
+    def revert_journal_reader(self, key, journal_reader: JournalReader) -> None:
+        journal_access_manager_set = self._journal_access_manager_set[key]
+        journal_access_manager_set.journal_read_access_manager.revert_journal_reader(journal_reader=journal_reader)
 
-    def get_journal_reader(self) -> JournalReader:
-        return self._journal_read_access_manager.get_journal_reader()
+    def get_journal_writer(self, key) -> JournalWriter:
+        journal_access_manager_set = self._get_or_create_journal_access_manager_set(key=key)
+        return journal_access_manager_set.journal_write_access_manager.get_journal_writer()
 
-    def revert_journal_reader(self, journal_reader: JournalReader) -> None:
-        self._journal_read_access_manager.revert_journal_reader(journal_reader=journal_reader)
+    def revert_journal_writer(self, key, journal_writer: JournalWriter) -> None:
+        journal_access_manager_set = self._journal_access_manager_set[key]
+        journal_access_manager_set.journal_write_access_manager.revert_journal_writer(journal_writer=journal_writer)
 
-    def get_journal_staff(self) -> JournalStaff:
-        return self._journal_staff_access_manager.get_journal_staff()
+    def get_journal_staff(self, key) -> JournalStaff:
+        journal_access_manager_set = self._journal_access_manager_set[key]
+        return journal_access_manager_set.journal_staff_access_manager.get_journal_staff()
 
-    def revert_journal_staff(self, journal_staff: JournalStaff) -> None:
-        self._journal_staff_access_manager.revert_journal_staff(journal_staff=journal_staff)
+    def revert_journal_staff(self, key, journal_staff: JournalStaff) -> None:
+        journal_access_manager_set = self._journal_access_manager_set[key]
+        journal_access_manager_set.journal_staff_access_manager.revert_journal_staff(journal_staff=journal_staff)
+
+    def _get_or_create_journal_access_manager_set(self, key) -> JournalAccessManagerSet:
+        journal_access_manager_set = self._journal_access_manager_set.get(key)
+        if not journal_access_manager_set:
+            journal_access_manager_set = self._create_journal_access_manager_set()
+            self._journal_access_manager_set[key] = journal_access_manager_set
+        return journal_access_manager_set
+
+    def _create_journal_access_manager_set(self) -> JournalAccessManagerSet:
+        journal = Journal()
+        return JournalAccessManagerSet(
+            journal_read_access_manager=JournalReadAccessManager(
+                journal_reader=JournalReader(journal=journal),
+            ),
+            journal_write_access_manager=JournalWriteAccessManager(
+                journal_writers=[JournalWriter(journal=journal)]
+            ),
+            journal_staff_access_manager=JournalStaffAccessManager(
+                journal_staff=JournalStaff(journal=journal)
+            )
+        )
 
 
 class Transaction(abc.ABC):
+    def __init__(self, access_manager: AccessManager, transaction_id):
+        self._access_manager = access_manager
+        self._transaction_id = transaction_id
+
     def __enter__(self):
-        self._writers = {}
-        self._readers = {}
+        self._writers: dict[Hashable, JournalWriter] = {}
+        self._readers: dict[Hashable, JournalReader] = {}
+        return self
 
     def __exit__(self, *args, **kwargs):
-        ...
-
-    @abc.abstractmethod
-    def __getitem__(self, item):
-        ...
-
-    @abc.abstractmethod
-    def __setitem__(self, key, value):
-        ...
-
-
-class TransDict:
-    def __init__(self):
-        self.journals = {}
+        for key, writer in self._writers.items():
+            writer.rollback()
+            self._access_manager.revert_journal_writer(key=key, journal_writer=writer)
+        for key, reader in self._readers.items():
+            self._access_manager.revert_journal_reader(key=key, journal_reader=reader)
 
     def __getitem__(self, item):
-        print('__getitem__', item)
-        return self.journals[item]
+        reader = self._readers.get(item)
+        if not reader:
+            reader = self._access_manager.get_journal_reader(item)
+            self._readers[item] = reader
+        value = reader.get_value()
+        return self.execute_value(value=value)
 
     def __setitem__(self, key, value):
-        print('__setitem__', key, value)
-        if key in self.journals:
-            self.journals[key] = value
-        else:
-            self.journals[key] = Journal()
-            self.journals[key].add_entry(value)
+        writer = self._writers.get(key)
+        if not writer:
+            writer = self._access_manager.get_journal_writer(key)
+            self._writers[key] = writer
+        value = Value(
+            value=value,
+            transaction_id=self._transaction_id
+        )
+        writer.add_value(value=value)
+
+    def commit(self):
+        for writer in self._writers.values():
+            writer.commit()
+
+    def rollback(self):
+        for writer in self._writers.values():
+            writer.rollback()
+
+    @abc.abstractmethod
+    def execute_value(self, value: Value):
+        ...
 
 
-a = TransDict()
-a['1'] = 1
-print()
-a['1'] += 1
+class ReadCommittedTransaction(Transaction):
+    def execute_value(self, value: Value):
+        cursor_value = value
+        while cursor_value:
+            if cursor_value.is_committed or cursor_value.transaction_id == self._transaction_id:
+                return cursor_value.value
+            else:
+                cursor_value = value.prev
+        raise KeyError()
+
+
+access_manager = AccessManager()
+with ReadCommittedTransaction(access_manager=access_manager, transaction_id=1) as d:
+    d[1] = 1
+    print(d[1])
+    d.commit()
+
+with ReadCommittedTransaction(access_manager=access_manager, transaction_id=2) as d:
+    print(d[1])
 
