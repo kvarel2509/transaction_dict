@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import abc
 import dataclasses
+import enum
 import uuid
 from typing import Any, Hashable
 from collections import deque
@@ -205,23 +206,34 @@ class Transaction(abc.ABC):
             self._access_manager.revert_journal_reader(key=key, journal_reader=reader)
 
     def __getitem__(self, item):
-        reader = self._readers.get(item)
-        if not reader:
-            reader = self._access_manager.get_journal_reader(item)
-            self._readers[item] = reader
+        reader = self.get_reader(item=item)
         value = reader.get_value()
         return self.execute_value(value=value)
 
     def __setitem__(self, key, value):
+        writer = self.get_writer(key=key)
+        value = self.prepare_value(value=value)
+        writer.add_value(value=value)
+
+    def get_reader(self, item):
+        reader = self._readers.get(item)
+        if not reader:
+            reader = self._access_manager.get_journal_reader(item)
+            self._readers[item] = reader
+        return reader
+
+    def get_writer(self, key):
         writer = self._writers.get(key)
         if not writer:
             writer = self._access_manager.get_journal_writer(key)
             self._writers[key] = writer
-        value = Value(
+        return writer
+
+    def prepare_value(self, value: Any):
+        return Value(
             value=value,
             transaction_id=self._transaction_id
         )
-        writer.add_value(value=value)
 
     def commit(self):
         for writer in self._writers.values():
@@ -247,12 +259,96 @@ class ReadCommittedTransaction(Transaction):
         raise KeyError()
 
 
-access_manager = AccessManager()
-with ReadCommittedTransaction(access_manager=access_manager, transaction_id=1) as d:
-    d[1] = 1
-    print(d[1])
-    d.commit()
+class ReadUncommittedTransaction(Transaction):
+    def execute_value(self, value: Value):
+        return value.value
 
-with ReadCommittedTransaction(access_manager=access_manager, transaction_id=2) as d:
-    print(d[1])
 
+class SerializableTransaction(Transaction):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.is_active = True
+
+    def validate_is_active_flag(self):
+        assert self.is_active, 'Transaction is not active'
+
+    def __getitem__(self, item):
+        self.validate_is_active_flag()
+        return super().__getitem__(item)
+
+    def __setitem__(self, key, value):
+        self.validate_is_active_flag()
+        reader = self.get_reader(item=key)
+        value = reader.get_value()
+        if value.transaction_id > self._transaction_id:
+            self.is_active = False
+        self.validate_is_active_flag()
+        super().__setitem__(key, value)
+
+    def execute_value(self, value: Value):
+        cursor_value = value
+        while cursor_value:
+            if any([
+                cursor_value.transaction_id == self._transaction_id,
+                cursor_value.is_committed and cursor_value.transaction_id < self._transaction_id
+            ]):
+                return cursor_value.value
+            else:
+                cursor_value = value.prev
+        raise KeyError()
+
+
+class TransactionIsolationLevel(enum.Enum):
+    READ_UNCOMMITTED = 'read_uncommitted'
+    READ_COMMITTED = 'read_committed'
+    SERIALIZABLE = 'serializable'
+
+
+class TransactionFactory:
+    def __init__(self, access_manager: AccessManager):
+        self.access_manager = access_manager
+        self.transaction_id_counter = 0
+
+    def create_transaction(self, isolation_level: TransactionIsolationLevel):
+        transaction_id = self.get_transaction_id()
+        if isolation_level is TransactionIsolationLevel.READ_UNCOMMITTED:
+            return ReadUncommittedTransaction(
+                access_manager=self.access_manager,
+                transaction_id=transaction_id
+            )
+        elif isolation_level is TransactionIsolationLevel.READ_COMMITTED:
+            return ReadCommittedTransaction(
+                access_manager=self.access_manager,
+                transaction_id=transaction_id
+            )
+        elif isolation_level is TransactionIsolationLevel.SERIALIZABLE:
+            return SerializableTransaction(
+                access_manager=self.access_manager,
+                transaction_id=transaction_id
+            )
+        else:
+            raise NotImplementedError()
+
+    def get_transaction_id(self):
+        self.transaction_id_counter += 1
+        return self.transaction_id_counter
+
+
+class TransactionDict:
+    def __init__(self):
+        self.transaction_factory = TransactionFactory(access_manager=AccessManager())
+        self.default_transaction_isolation_level = TransactionIsolationLevel.READ_COMMITTED
+
+    def begin(self, isolation_level: TransactionIsolationLevel = None):
+        isolation_level = isolation_level or self.default_transaction_isolation_level
+        transaction = self.transaction_factory.create_transaction(isolation_level=isolation_level)
+        return transaction
+
+    def __getitem__(self, item):
+        with self.begin() as transaction:
+            return transaction[item]
+
+    def __setitem__(self, key, value):
+        with self.begin() as transaction:
+            transaction[key] = value
+            transaction.commit()
