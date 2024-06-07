@@ -58,8 +58,8 @@ class ReadCommittedTransactionDictTestCase(TestCase):
         key = 'key'
         old_value, new_value = 'old_value', 'new_value'
         self.transaction_dict[key] = old_value
-        self.transaction_1.__enter__()
-        self.transaction_2.__enter__()
+        self.transaction_1.start()
+        self.transaction_2.start()
         self.transaction_1[key] = new_value
         self.assertEqual(self.transaction_1[key], new_value)
         self.assertEqual(self.transaction_2[key], old_value)
@@ -82,8 +82,8 @@ class ReadUncommittedTransactionDictTestCase(TestCase):
         key = 'key'
         old_value, new_value = 'old_value', 'new_value'
         self.transaction_dict[key] = old_value
-        self.transaction_1.__enter__()
-        self.transaction_2.__enter__()
+        self.transaction_1.start()
+        self.transaction_2.start()
         self.transaction_1[key] = new_value
         self.assertEqual(self.transaction_1[key], new_value)
         self.assertEqual(self.transaction_2[key], new_value)
@@ -106,13 +106,13 @@ class SerializableTransactionDictTestCase(TestCase):
     def test_can_read_only_their_or_fixed_values(self):
         key = 'key'
         old_value, new_value = 'old_value', 'new_value'
-        self.transaction_0.__enter__()
+        self.transaction_0.start()
         self.transaction_0[key] = old_value
         self.transaction_0.commit()
-        self.transaction_0.__exit__()
+        self.transaction_0.close()
 
-        self.transaction_1.__enter__()
-        self.transaction_2.__enter__()
+        self.transaction_1.start()
+        self.transaction_2.start()
         self.transaction_1[key] = new_value
         self.assertEqual(self.transaction_1[key], new_value)
         self.assertEqual(self.transaction_2[key], old_value)

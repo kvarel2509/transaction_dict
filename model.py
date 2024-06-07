@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import abc
 import dataclasses
+import datetime
 import enum
 import uuid
 from typing import Any, Hashable
@@ -11,7 +12,8 @@ from collections import deque
 @dataclasses.dataclass
 class Value:
     value: Any
-    transaction_id: int
+    transaction_id: uuid.UUID
+    timestamp: datetime.datetime
     is_committed: bool = False
     prev: Value = None
 
@@ -189,21 +191,20 @@ class AccessManager:
 
 
 class Transaction(abc.ABC):
-    def __init__(self, access_manager: AccessManager, transaction_id):
+    _writers: dict[Hashable, JournalWriter]
+    _readers: dict[Hashable, JournalReader]
+
+    def __init__(self, access_manager: AccessManager, transaction_id, transaction_start_timestamp):
         self._access_manager = access_manager
         self._transaction_id = transaction_id
+        self._transaction_start_timestamp = transaction_start_timestamp
 
     def __enter__(self):
-        self._writers: dict[Hashable, JournalWriter] = {}
-        self._readers: dict[Hashable, JournalReader] = {}
+        self.start()
         return self
 
     def __exit__(self, *args, **kwargs):
-        for key, writer in self._writers.items():
-            writer.rollback()
-            self._access_manager.revert_journal_writer(key=key, journal_writer=writer)
-        for key, reader in self._readers.items():
-            self._access_manager.revert_journal_reader(key=key, journal_reader=reader)
+        self.close()
 
     def __getitem__(self, item):
         reader = self.get_reader(item=item)
@@ -214,6 +215,17 @@ class Transaction(abc.ABC):
         writer = self.get_writer(key=key)
         value = self.prepare_value(value=value)
         writer.add_value(value=value)
+
+    def start(self):
+        self._writers: dict[Hashable, JournalWriter] = {}
+        self._readers: dict[Hashable, JournalReader] = {}
+
+    def close(self):
+        for key, writer in self._writers.items():
+            writer.rollback()
+            self._access_manager.revert_journal_writer(key=key, journal_writer=writer)
+        for key, reader in self._readers.items():
+            self._access_manager.revert_journal_reader(key=key, journal_reader=reader)
 
     def get_reader(self, item):
         reader = self._readers.get(item)
@@ -232,7 +244,8 @@ class Transaction(abc.ABC):
     def prepare_value(self, value: Any):
         return Value(
             value=value,
-            transaction_id=self._transaction_id
+            transaction_id=self._transaction_id,
+            timestamp=datetime.datetime.now()
         )
 
     def commit(self):
@@ -278,11 +291,14 @@ class SerializableTransaction(Transaction):
 
     def __setitem__(self, key, value):
         self.validate_is_active_flag()
-        reader = self.get_reader(item=key)
-        value = reader.get_value()
-        if value.transaction_id > self._transaction_id:
-            self.is_active = False
-        self.validate_is_active_flag()
+        try:
+            reader = self.get_reader(item=key)
+            current_value = reader.get_value()
+            if current_value.timestamp > self._transaction_start_timestamp:
+                self.is_active = False
+            self.validate_is_active_flag()
+        except KeyError:
+            pass
         super().__setitem__(key, value)
 
     def execute_value(self, value: Value):
@@ -290,7 +306,7 @@ class SerializableTransaction(Transaction):
         while cursor_value:
             if any([
                 cursor_value.transaction_id == self._transaction_id,
-                cursor_value.is_committed and cursor_value.transaction_id < self._transaction_id
+                cursor_value.is_committed and cursor_value.timestamp < self._transaction_start_timestamp
             ]):
                 return cursor_value.value
             else:
@@ -307,31 +323,30 @@ class TransactionIsolationLevel(enum.Enum):
 class TransactionFactory:
     def __init__(self, access_manager: AccessManager):
         self.access_manager = access_manager
-        self.transaction_id_counter = 0
 
     def create_transaction(self, isolation_level: TransactionIsolationLevel):
-        transaction_id = self.get_transaction_id()
+        transaction_id = uuid.uuid4()
+        transaction_start_timestamp = datetime.datetime.now()
         if isolation_level is TransactionIsolationLevel.READ_UNCOMMITTED:
             return ReadUncommittedTransaction(
                 access_manager=self.access_manager,
-                transaction_id=transaction_id
+                transaction_id=transaction_id,
+                transaction_start_timestamp=transaction_start_timestamp
             )
         elif isolation_level is TransactionIsolationLevel.READ_COMMITTED:
             return ReadCommittedTransaction(
                 access_manager=self.access_manager,
-                transaction_id=transaction_id
+                transaction_id=transaction_id,
+                transaction_start_timestamp=transaction_start_timestamp
             )
         elif isolation_level is TransactionIsolationLevel.SERIALIZABLE:
             return SerializableTransaction(
                 access_manager=self.access_manager,
-                transaction_id=transaction_id
+                transaction_id=transaction_id,
+                transaction_start_timestamp=transaction_start_timestamp
             )
         else:
             raise NotImplementedError()
-
-    def get_transaction_id(self):
-        self.transaction_id_counter += 1
-        return self.transaction_id_counter
 
 
 class TransactionDict:
