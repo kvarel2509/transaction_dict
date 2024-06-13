@@ -13,7 +13,7 @@ from collections import deque
 class Value:
     value: Any
     transaction_id: uuid.UUID
-    timestamp: datetime.datetime
+    operation_id: int
     is_committed: bool = False
     prev: Value = None
 
@@ -134,7 +134,7 @@ class JournalStaffAccessManager:
 
 
 @dataclasses.dataclass
-class JournalAccessManagerSet:
+class JournalAccessManager:
     journal_write_access_manager: JournalWriteAccessManager
     journal_read_access_manager: JournalReadAccessManager
     journal_staff_access_manager: JournalStaffAccessManager
@@ -142,14 +142,14 @@ class JournalAccessManagerSet:
 
 class AccessManager:
     def __init__(self):
-        self._journal_access_manager_set: dict[Hashable, JournalAccessManagerSet] = {}
+        self._journal_access_manager: dict[Hashable, JournalAccessManager] = {}
 
     def get_journal_reader(self, key) -> JournalReader:
-        journal_access_manager_set = self._journal_access_manager_set[key]
+        journal_access_manager_set = self._journal_access_manager[key]
         return journal_access_manager_set.journal_read_access_manager.get_journal_reader()
 
     def revert_journal_reader(self, key, journal_reader: JournalReader) -> None:
-        journal_access_manager_set = self._journal_access_manager_set[key]
+        journal_access_manager_set = self._journal_access_manager[key]
         journal_access_manager_set.journal_read_access_manager.revert_journal_reader(journal_reader=journal_reader)
 
     def get_journal_writer(self, key) -> JournalWriter:
@@ -157,27 +157,27 @@ class AccessManager:
         return journal_access_manager_set.journal_write_access_manager.get_journal_writer()
 
     def revert_journal_writer(self, key, journal_writer: JournalWriter) -> None:
-        journal_access_manager_set = self._journal_access_manager_set[key]
+        journal_access_manager_set = self._journal_access_manager[key]
         journal_access_manager_set.journal_write_access_manager.revert_journal_writer(journal_writer=journal_writer)
 
     def get_journal_staff(self, key) -> JournalStaff:
-        journal_access_manager_set = self._journal_access_manager_set[key]
+        journal_access_manager_set = self._journal_access_manager[key]
         return journal_access_manager_set.journal_staff_access_manager.get_journal_staff()
 
     def revert_journal_staff(self, key, journal_staff: JournalStaff) -> None:
-        journal_access_manager_set = self._journal_access_manager_set[key]
+        journal_access_manager_set = self._journal_access_manager[key]
         journal_access_manager_set.journal_staff_access_manager.revert_journal_staff(journal_staff=journal_staff)
 
-    def _get_or_create_journal_access_manager_set(self, key) -> JournalAccessManagerSet:
-        journal_access_manager_set = self._journal_access_manager_set.get(key)
+    def _get_or_create_journal_access_manager_set(self, key) -> JournalAccessManager:
+        journal_access_manager_set = self._journal_access_manager.get(key)
         if not journal_access_manager_set:
             journal_access_manager_set = self._create_journal_access_manager_set()
-            self._journal_access_manager_set[key] = journal_access_manager_set
+            self._journal_access_manager[key] = journal_access_manager_set
         return journal_access_manager_set
 
-    def _create_journal_access_manager_set(self) -> JournalAccessManagerSet:
+    def _create_journal_access_manager_set(self) -> JournalAccessManager:
         journal = Journal()
-        return JournalAccessManagerSet(
+        return JournalAccessManager(
             journal_read_access_manager=JournalReadAccessManager(
                 journal_reader=JournalReader(journal=journal),
             ),
@@ -193,11 +193,11 @@ class AccessManager:
 class Transaction(abc.ABC):
     _writers: dict[Hashable, JournalWriter]
     _readers: dict[Hashable, JournalReader]
+    _transaction_start_timestamp: datetime.datetime
 
-    def __init__(self, access_manager: AccessManager, transaction_id, transaction_start_timestamp):
+    def __init__(self, access_manager: AccessManager, transaction_id):
         self._access_manager = access_manager
         self._transaction_id = transaction_id
-        self._transaction_start_timestamp = transaction_start_timestamp
 
     def __enter__(self):
         self.start()
@@ -219,6 +219,7 @@ class Transaction(abc.ABC):
     def start(self):
         self._writers: dict[Hashable, JournalWriter] = {}
         self._readers: dict[Hashable, JournalReader] = {}
+        self._transaction_start_timestamp = datetime.datetime.now()
 
     def close(self):
         for key, writer in self._writers.items():
@@ -326,24 +327,20 @@ class TransactionFactory:
 
     def create_transaction(self, isolation_level: TransactionIsolationLevel):
         transaction_id = uuid.uuid4()
-        transaction_start_timestamp = datetime.datetime.now()
         if isolation_level is TransactionIsolationLevel.READ_UNCOMMITTED:
             return ReadUncommittedTransaction(
                 access_manager=self.access_manager,
                 transaction_id=transaction_id,
-                transaction_start_timestamp=transaction_start_timestamp
             )
         elif isolation_level is TransactionIsolationLevel.READ_COMMITTED:
             return ReadCommittedTransaction(
                 access_manager=self.access_manager,
                 transaction_id=transaction_id,
-                transaction_start_timestamp=transaction_start_timestamp
             )
         elif isolation_level is TransactionIsolationLevel.SERIALIZABLE:
             return SerializableTransaction(
                 access_manager=self.access_manager,
                 transaction_id=transaction_id,
-                transaction_start_timestamp=transaction_start_timestamp
             )
         else:
             raise NotImplementedError()

@@ -3,77 +3,129 @@ import dataclasses
 import datetime
 import uuid
 from collections import deque
-from typing import Optional
+from typing import Optional, Any, Hashable
+
+from model import Transaction
+
+
+class IntegrityError(Exception):
+    pass
 
 
 class Deleted:
     pass
 
 
-class ActiveJournal:
-    def __init__(self, transaction):
-        self.transaction = transaction
-        self.data = {}
+@dataclasses.dataclass
+class UncommittedValue:
+    value: Any
+    transaction: int
 
-    def __getitem__(self, item):
-        return self.data[item]
 
-    def __setitem__(self, key, value):
-        self.data[key] = value
+class UncommittedJournalRepository:
+    def __init__(self):
+        self.journal: dict[Hashable, UncommittedValue] = {}
 
-    def __contains__(self, item):
-        return item in self.data
+    def set(self, transaction: int, key: Hashable, value: Any):
+        self.journal[key] = UncommittedValue(
+            transaction=transaction,
+            value=value
+        )
+
+    def __getitem__(self, key: Hashable) -> UncommittedValue:
+        return self.journal[key]
+
+    def __contains__(self, key: Hashable) -> bool:
+        return key in self.journal
+
+    def pop_journal(self, transaction: int) -> dict:
+        journal = {
+            key: value
+            for key, value in self.journal.items()
+            if value.transaction == transaction
+        }
+        self.delete_journal(transaction=transaction)
+        return journal
+
+    def delete_journal(self, transaction: int) -> None:
+        self.journal = {
+            key: value
+            for key, value in self.journal.items()
+            if value.transaction != transaction
+        }
+
+
+class LockManager:
+    def __init__(self, repo: UncommittedJournalRepository):
+        self.repo = repo
+        self.locks = {}
+
+    def set(self, transaction: int, key: Hashable, value: Any):
+        if key not in self.locks:
+            self.locks[key] = deque([transaction])
+            self.repo.set(transaction=transaction, key=key, value=value)
+        elif key in self.repo and self.repo[key].transaction == transaction:
+            self.repo.set(transaction=transaction, key=key, value=value)
+        else:
+            while
 
 
 @dataclasses.dataclass
-class CommitedJournal:
+class CommittedJournal:
     offset: int
     data: dict
-    prev: CommitedJournal = None
+    prev: CommittedJournal = None
 
-    def __getitem__(self, item):
-        return self.data[item]
+    def __getitem__(self, key):
+        return self.data[key]
 
 
-class CommitedJournalRepository:
+class CommittedJournalRepository:
     def __init__(self):
-        self.offset_counter = 0
-        self.journal = CommitedJournal(
-            offset=self.offset_counter,
+        self._current_offset = 0
+        self._journal = CommittedJournal(
+            offset=self._current_offset,
             data={}
         )
 
-    def commit_active_journal(self, journal: ActiveJournal):
-        self.offset_counter += 1
-        self.journal = CommitedJournal(
-            offset=self.offset_counter,
-            data=journal.data,
-            prev=self.journal
+    def commit(self, data: dict):
+        self._current_offset += 1
+        self._journal = CommittedJournal(
+            offset=self._current_offset,
+            data=data,
+            prev=self._journal
         )
 
-    def getitem(self, item, offset: int = None):
-        offset = offset or self.offset_counter
-        journal = self.journal
+    def getitem(self, key, offset: int = None):
+        offset = offset or self._current_offset
+        journal = self._journal
         while journal and journal.offset > offset:
             journal = journal.prev
         while journal:
             try:
-                return journal[item]
+                return journal[key]
             except KeyError:
                 journal = journal.prev
         raise KeyError()
 
+    @property
+    def current_offset(self):
+        return self._current_offset
+
 
 class JournalRepository:
-    # Хранилище для журналов транзакций.
     def __init__(self):
-        self._commited = deque()
-        self._active = {}
+        self.committed = CommittedJournalRepository()
+        self.uncommitted = UncommittedJournalRepository()
 
+    def set(self, transaction: int, key: Hashable, value: Any):
+        self.uncommitted.set(transaction=transaction, key=key, value=value)
 
-class LockManager:
-    # Декоратор над репозиторием. Отслеживает блокировки
-    def __init__(self):
-        ...
+    def commit(self, transaction: int):
+        data = self.uncommitted.pop_journal(transaction=transaction)
+        self.committed.commit(data=data)
+
+    def rollback(self, transaction: int):
+        self.uncommitted.delete_journal(transaction=transaction)
 
 
