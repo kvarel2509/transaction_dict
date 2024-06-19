@@ -1,11 +1,10 @@
 from __future__ import annotations
 import dataclasses
 import datetime
+import enum
 import uuid
 from collections import deque
 from typing import Optional, Any, Hashable
-
-from model import Transaction
 
 
 class IntegrityError(Exception):
@@ -114,4 +113,58 @@ class JournalRepository:
     def rollback(self, transaction: int):
         self.uncommitted.delete_journal(transaction=transaction)
 
+
+class Transaction:
+    def __init__(self, journal_repository: JournalRepository):
+        self.journal_repository = journal_repository
+
+
+
+
+class ReadUncommittedTransaction(Transaction):
+    pass
+
+
+class ReadCommittedTransaction(Transaction):
+    pass
+
+
+class SerializableTransaction(Transaction):
+    pass
+
+
+class IsolationLevel(enum.Enum):
+    READ_UNCOMMITTED = 'read_uncommitted'
+    READ_COMMITTED = 'read_committed'
+    SERIALIZABLE = 'serializable'
+
+
+class TransactionManager:
+    def __init__(self, transaction_factory: TransactionFactory):
+        self.transaction_factory = transaction_factory
+        self.transactions: dict[uuid.UUID, Transaction] = {}
+
+    def __getitem__(self, item: uuid.UUID) -> Transaction:
+        return self.transactions[item]
+
+    def create_transaction(self, isolation_level: IsolationLevel) -> uuid.UUID:
+        transaction_id = uuid.uuid4()
+        transaction = self.transaction_factory.create_transaction(isolation_level=isolation_level)
+        self.transactions[transaction_id] = transaction
+        return transaction_id
+
+
+class TransactionFactory:
+    def __init__(self, journal_repository: JournalRepository):
+        self.journal_repository = journal_repository
+
+    def create_transaction(self, isolation_level: IsolationLevel) -> Transaction:
+        if isolation_level == IsolationLevel.READ_UNCOMMITTED:
+            return ReadUncommittedTransaction()
+        elif isolation_level == IsolationLevel.READ_COMMITTED:
+            return ReadCommittedTransaction()
+        elif isolation_level == IsolationLevel.SERIALIZABLE:
+            return SerializableTransaction()
+        else:
+            raise NotImplementedError()
 
