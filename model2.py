@@ -114,6 +114,15 @@ class Transaction:
     def __setitem__(self, key, value):
         self.access_strategy[key] = value
 
+    def __delitem__(self, key):
+        del self.access_strategy[key]
+
+    def commit(self):
+        ...
+
+    def rollback(self):
+        ...
+
     def set_isolation_level(self, isolation_level: IsolationLevel) -> None:
         access_strategy = self.initialize_access_strategy(isolation_level)
         self.access_strategy = access_strategy
@@ -150,6 +159,9 @@ class AccessStrategy(abc.ABC):
                 key in self.transaction.journal.uncommitted
                 and self.transaction.journal.uncommitted.get(key=key).transaction != self.transaction
         )
+
+    def __delitem__(self, key):
+        ...
 
 
 class ReadUncommittedAccessStrategy(AccessStrategy):
