@@ -34,10 +34,10 @@ class Journal:
 
     def clear_history(self, min_transaction_id: int) -> None:
         last_value = self._value
-        if last_value.transaction_id < min_transaction_id:
+        if last_value.identifier < min_transaction_id:
             self._value = None
         else:
-            while last_value.prev and last_value.prev.transaction_id >= min_transaction_id:
+            while last_value.prev and last_value.prev.identifier >= min_transaction_id:
                 last_value = last_value.prev
             last_value.prev = None
 

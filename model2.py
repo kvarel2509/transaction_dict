@@ -1,10 +1,9 @@
 from __future__ import annotations
+
+import abc
 import dataclasses
-import datetime
 import enum
-import uuid
-from collections import deque
-from typing import Optional, Any, Hashable
+from typing import Any, Hashable
 
 
 class IntegrityError(Exception):
@@ -18,41 +17,21 @@ class Deleted:
 @dataclasses.dataclass
 class UncommittedValue:
     value: Any
-    transaction: int
+    transaction: Transaction
 
 
 class UncommittedJournalRepository:
     def __init__(self):
         self._journal: dict[Hashable, UncommittedValue] = {}
-        self._transaction_log: dict[int, set[Hashable]] = {}
 
-    def set(self, transaction: int, key: Hashable, value: Any):
-        if key in self._journal and self._journal[key].transaction != transaction:
-            raise IntegrityError()
-        self._transaction_log.setdefault(transaction, set()).add(key)
-        self._journal[key] = UncommittedValue(
-            transaction=transaction,
-            value=value
-        )
-
-    def __getitem__(self, key: Hashable) -> UncommittedValue:
+    def get(self, key: Hashable) -> UncommittedValue:
         return self._journal[key]
+
+    def set(self, key: Hashable, value: UncommittedValue):
+        self._journal[key] = value
 
     def __contains__(self, key: Hashable) -> bool:
         return key in self._journal
-
-    def pop_journal(self, transaction: int) -> dict:
-        journal = {
-            key: self._journal.pop(key)
-            for key in self._transaction_log[transaction]
-        }
-        del self._transaction_log[transaction]
-        return journal
-
-    def delete_journal(self, transaction: int) -> None:
-        for key in self._transaction_log[transaction]:
-            del self._journal[key]
-        del self._transaction_log[transaction]
 
 
 @dataclasses.dataclass
@@ -81,12 +60,12 @@ class CommittedJournalRepository:
             prev=self._journal
         )
 
-    def getitem(self, key, offset: int = None):
-        offset = offset or self._current_offset
+    def get(self, key, min_offset: int = 0, max_offset: int = None):
+        max_offset = max_offset or self._current_offset
         journal = self._journal
-        while journal and journal.offset > offset:
+        while journal and journal.offset > max_offset:
             journal = journal.prev
-        while journal:
+        while journal and journal.offset >= min_offset:
             try:
                 return journal[key]
             except KeyError:
@@ -98,39 +77,16 @@ class CommittedJournalRepository:
         return self._current_offset
 
 
-class JournalRepository:
+class Journal:
     def __init__(self):
         self.committed = CommittedJournalRepository()
         self.uncommitted = UncommittedJournalRepository()
 
-    def set(self, transaction: int, key: Hashable, value: Any):
-        self.uncommitted.set(transaction=transaction, key=key, value=value)
+    def commit(self, transaction: Transaction):
+        ...
 
-    def commit(self, transaction: int):
-        data = self.uncommitted.pop_journal(transaction=transaction)
-        self.committed.commit(data=data)
-
-    def rollback(self, transaction: int):
-        self.uncommitted.delete_journal(transaction=transaction)
-
-
-class Transaction:
-    def __init__(self, journal_repository: JournalRepository):
-        self.journal_repository = journal_repository
-
-
-
-
-class ReadUncommittedTransaction(Transaction):
-    pass
-
-
-class ReadCommittedTransaction(Transaction):
-    pass
-
-
-class SerializableTransaction(Transaction):
-    pass
+    def rollback(self, transaction: Transaction):
+        ...
 
 
 class IsolationLevel(enum.Enum):
@@ -139,32 +95,103 @@ class IsolationLevel(enum.Enum):
     SERIALIZABLE = 'serializable'
 
 
-class TransactionManager:
-    def __init__(self, transaction_factory: TransactionFactory):
-        self.transaction_factory = transaction_factory
-        self.transactions: dict[uuid.UUID, Transaction] = {}
+class Transaction:
+    def __init__(self, journal: Journal, isolation_level: IsolationLevel):
+        self.journal = journal
+        self.access_strategy: AccessStrategy = self.initialize_access_strategy(isolation_level=isolation_level)
 
-    def __getitem__(self, item: uuid.UUID) -> Transaction:
-        return self.transactions[item]
+    def initialize_access_strategy(self, isolation_level: IsolationLevel) -> AccessStrategy:
+        if isolation_level == IsolationLevel.READ_UNCOMMITTED:
+            return ReadUncommittedAccessStrategy(transaction=self)
+        elif isolation_level == IsolationLevel.READ_COMMITTED:
+            return ReadCommittedAccessStrategy(transaction=self)
+        elif isolation_level == IsolationLevel.SERIALIZABLE:
+            return SerializableAccessStrategy(transaction=self)
 
-    def create_transaction(self, isolation_level: IsolationLevel) -> uuid.UUID:
-        transaction_id = uuid.uuid4()
-        transaction = self.transaction_factory.create_transaction(isolation_level=isolation_level)
-        self.transactions[transaction_id] = transaction
-        return transaction_id
+    def __getitem__(self, item):
+        return self.access_strategy[item]
+
+    def __setitem__(self, key, value):
+        self.access_strategy[key] = value
+
+    def set_isolation_level(self, isolation_level: IsolationLevel) -> None:
+        access_strategy = self.initialize_access_strategy(isolation_level)
+        self.access_strategy = access_strategy
+
+
+class AccessStrategy(abc.ABC):
+    def __init__(self, transaction: Transaction):
+        self.transaction = transaction
+
+    def __getitem__(self, item):
+        value = self.execute(item)
+        if isinstance(value, Deleted):
+            raise KeyError()
+        return value
+
+    @abc.abstractmethod
+    def execute(self, item) -> Any:
+        ...
+
+    def __setitem__(self, key, value):
+        if not self.is_setitem_allowed(key=key):
+            raise IntegrityError()
+        uncommitted_value = UncommittedValue(
+            value=value,
+            transaction=self.transaction
+        )
+        self.transaction.journal.uncommitted.set(
+            key=key,
+            value=uncommitted_value
+        )
+
+    def is_setitem_allowed(self, key) -> bool:
+        return (
+                key in self.transaction.journal.uncommitted
+                and self.transaction.journal.uncommitted.get(key=key).transaction != self.transaction
+        )
+
+
+class ReadUncommittedAccessStrategy(AccessStrategy):
+    def execute(self, item):
+        try:
+            uncommitted_value = self.transaction.journal.uncommitted.get(key=item)
+            return uncommitted_value.value
+        except KeyError:
+            committed_value = self.transaction.journal.committed.get(key=item)
+            return committed_value
+
+
+class ReadCommittedAccessStrategy(AccessStrategy):
+    def execute(self, item):
+        committed_value = self.transaction.journal.committed.get(key=item)
+        return committed_value
+
+
+class SerializableAccessStrategy(AccessStrategy):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.target_offset = self.transaction.journal.committed.current_offset
+
+    def execute(self, item):
+        committed_value = self.transaction.journal.committed.get(key=item, max_offset=self.target_offset)
+        return committed_value
+
+    def is_setitem_allowed(self, key) -> bool:
+        try:
+            self.transaction.journal.committed.get(key=key, min_offset=self.target_offset)
+            return False
+        except KeyError:
+            return super().is_setitem_allowed(key=key)
 
 
 class TransactionFactory:
-    def __init__(self, journal_repository: JournalRepository):
-        self.journal_repository = journal_repository
+    def __init__(self, journal: Journal):
+        self.journal = journal
 
     def create_transaction(self, isolation_level: IsolationLevel) -> Transaction:
-        if isolation_level == IsolationLevel.READ_UNCOMMITTED:
-            return ReadUncommittedTransaction()
-        elif isolation_level == IsolationLevel.READ_COMMITTED:
-            return ReadCommittedTransaction()
-        elif isolation_level == IsolationLevel.SERIALIZABLE:
-            return SerializableTransaction()
-        else:
-            raise NotImplementedError()
-
+        transaction = Transaction(
+            journal=self.journal,
+            isolation_level=isolation_level
+        )
+        return transaction
