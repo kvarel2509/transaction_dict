@@ -20,7 +20,7 @@ class UncommittedValue:
     transaction: Transaction
 
 
-class UncommittedJournalRepository:
+class UncommittedJournal:
     def __init__(self):
         self._journal: dict[Hashable, UncommittedValue] = {}
 
@@ -32,6 +32,13 @@ class UncommittedJournalRepository:
 
     def __contains__(self, key: Hashable) -> bool:
         return key in self._journal
+
+    def pop(self, transaction: Transaction) -> dict[Hashable, UncommittedValue]:
+        return {
+            key: self._journal.pop(key)
+            for key, value in self._journal.items()
+            if value.transaction is transaction
+        }
 
 
 @dataclasses.dataclass
@@ -80,10 +87,11 @@ class CommittedJournalRepository:
 class Journal:
     def __init__(self):
         self.committed = CommittedJournalRepository()
-        self.uncommitted = UncommittedJournalRepository()
+        self.uncommitted = UncommittedJournal()
 
     def commit(self, transaction: Transaction):
-        ...
+        data = self.uncommitted.pop(transaction=transaction)
+        self.committed.commit()
 
     def rollback(self, transaction: Transaction):
         ...
@@ -118,10 +126,10 @@ class Transaction:
         del self.access_strategy[key]
 
     def commit(self):
-        ...
+        self.journal.commit(transaction=self)
 
     def rollback(self):
-        ...
+        self.journal.rollback(transaction=self)
 
     def set_isolation_level(self, isolation_level: IsolationLevel) -> None:
         access_strategy = self.initialize_access_strategy(isolation_level)
@@ -161,7 +169,7 @@ class AccessStrategy(abc.ABC):
         )
 
     def __delitem__(self, key):
-        ...
+        self[key] = Deleted()
 
 
 class ReadUncommittedAccessStrategy(AccessStrategy):
