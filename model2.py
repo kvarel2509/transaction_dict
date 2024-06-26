@@ -33,9 +33,9 @@ class UncommittedJournal:
     def __contains__(self, key: Hashable) -> bool:
         return key in self._journal
 
-    def pop(self, transaction: Transaction) -> dict[Hashable, UncommittedValue]:
+    def pop(self, transaction: Transaction) -> dict[Hashable, Any]:
         return {
-            key: self._journal.pop(key)
+            key: self._journal.pop(key).value
             for key, value in self._journal.items()
             if value.transaction is transaction
         }
@@ -91,10 +91,10 @@ class Journal:
 
     def commit(self, transaction: Transaction):
         data = self.uncommitted.pop(transaction=transaction)
-        self.committed.commit()
+        self.committed.commit(data=data)
 
     def rollback(self, transaction: Transaction):
-        ...
+        self.uncommitted.pop(transaction=transaction)
 
 
 class IsolationLevel(enum.Enum):
@@ -115,6 +115,12 @@ class Transaction:
             return ReadCommittedAccessStrategy(transaction=self)
         elif isolation_level == IsolationLevel.SERIALIZABLE:
             return SerializableAccessStrategy(transaction=self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args, **kwargs):
+        self.rollback()
 
     def __getitem__(self, item):
         return self.access_strategy[item]
@@ -215,3 +221,10 @@ class TransactionFactory:
             isolation_level=isolation_level
         )
         return transaction
+
+
+class TransactionDict:
+    def __init__(self):
+        self.transaction_factory = TransactionFactory(
+            journal=Journal()
+        )
