@@ -228,3 +228,18 @@ class TransactionDict:
         self.transaction_factory = TransactionFactory(
             journal=Journal()
         )
+
+    def __getitem__(self, item):
+        with self.transaction(isolation_level=IsolationLevel.READ_COMMITTED) as transaction:
+            return transaction[item]
+
+    def __setitem__(self, key, value):
+        with self.transaction(isolation_level=IsolationLevel.READ_COMMITTED) as transaction:
+            transaction[key] = value
+
+    def __delitem__(self, key):
+        with self.transaction(isolation_level=IsolationLevel.READ_COMMITTED) as transaction:
+            del transaction[key]
+
+    def transaction(self, isolation_level: IsolationLevel):
+        return self.transaction_factory.create_transaction(isolation_level=isolation_level)

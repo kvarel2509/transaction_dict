@@ -1,5 +1,4 @@
 from unittest import TestCase
-import threading
 
 from model import TransactionDict, TransactionIsolationLevel
 
