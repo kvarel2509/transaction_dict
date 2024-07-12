@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import abc
+import collections
 import dataclasses
 import enum
 from typing import Any, Hashable
@@ -15,61 +16,58 @@ class Deleted:
 
 
 @dataclasses.dataclass
-class UncommittedValue:
+class UncommittedItem:
     value: Any
     transaction: Transaction
 
 
-class UncommittedJournal:
-    def __init__(self):
-        self._journal: dict[Hashable, UncommittedValue] = {}
+class UncommittedJournal(collections.UserDict):
+    def __setitem__(self, key: Hashable, item: UncommittedItem):
+        assert isinstance(item, UncommittedItem), 'Value must be an instance of UncommittedItem'
+        super().__setitem__(key, item)
 
-    def get(self, key: Hashable) -> UncommittedValue:
-        return self._journal[key]
-
-    def set(self, key: Hashable, value: UncommittedValue):
-        self._journal[key] = value
-
-    def __contains__(self, key: Hashable) -> bool:
-        return key in self._journal
-
-    def pop(self, transaction: Transaction) -> dict[Hashable, Any]:
-        return {
-            key: self._journal.pop(key).value
-            for key, value in self._journal.items()
-            if value.transaction is transaction
-        }
+    def pop_by_transaction(self, transaction: Transaction) -> dict[Hashable, UncommittedItem]:
+        taken = {}
+        rest = {}
+        for key, uncommitted_item in self.data.items():
+            if uncommitted_item.transaction is transaction:
+                taken[key] = uncommitted_item
+            else:
+                rest[key] = uncommitted_item
+        self.data = rest
+        return taken
 
 
 @dataclasses.dataclass
-class CommittedJournal:
+class CommittedItem:
     offset: int
     payload: dict
-    prev: CommittedJournal = None
+    prev: CommittedItem = None
 
     def __getitem__(self, key):
         return self.payload[key]
 
 
-class CommittedJournalRepository:
+class CommittedJournal:
     def __init__(self):
         self._current_offset = 0
-        self._journal = CommittedJournal(
+        self._item = CommittedItem(
             offset=self._current_offset,
             payload={}
         )
 
-    def commit(self, data: dict):
+    def commit(self, payload: dict):
         self._current_offset += 1
-        self._journal = CommittedJournal(
+        self._item = CommittedItem(
             offset=self._current_offset,
-            payload=data,
-            prev=self._journal
+            payload=payload,
+            prev=self._item
         )
 
-    def get(self, key, min_offset: int = 0, max_offset: int = None):
-        max_offset = max_offset or self._current_offset
-        journal = self._journal
+    def get(self, key: Hashable, min_offset: int = 0, max_offset: int = None):
+        # TODO: заменить на использование срезов
+        max_offset = max_offset if max_offset is not None else self._current_offset
+        journal = self._item
         while journal and journal.offset > max_offset:
             journal = journal.prev
         while journal and journal.offset >= min_offset:
@@ -79,6 +77,12 @@ class CommittedJournalRepository:
                 journal = journal.prev
         raise KeyError()
 
+    def __iter__(self):
+        ...
+
+    def __len__(self):
+        ...
+
     @property
     def current_offset(self):
         return self._current_offset
@@ -86,15 +90,19 @@ class CommittedJournalRepository:
 
 class Journal:
     def __init__(self):
-        self.committed = CommittedJournalRepository()
+        self.committed = CommittedJournal()
         self.uncommitted = UncommittedJournal()
 
     def commit(self, transaction: Transaction):
-        data = self.uncommitted.pop(transaction=transaction)
-        self.committed.commit(data=data)
+        uncommitted_items_map = self.uncommitted.pop_by_transaction(transaction=transaction)
+        payload = {
+            key: uncommitted_item.value
+            for key, uncommitted_item in uncommitted_items_map.items()
+        }
+        self.committed.commit(payload=payload)
 
     def rollback(self, transaction: Transaction):
-        self.uncommitted.pop(transaction=transaction)
+        self.uncommitted.pop_by_transaction(transaction=transaction)
 
 
 class IsolationLevel(enum.Enum):
@@ -103,7 +111,7 @@ class IsolationLevel(enum.Enum):
     SERIALIZABLE = 'serializable'
 
 
-class Transaction:
+class Transaction(collections.MutableMapping):
     def __init__(self, journal: Journal, isolation_level: IsolationLevel):
         self.journal = journal
         self.access_strategy: AccessStrategy = self.initialize_access_strategy(isolation_level=isolation_level)
@@ -131,18 +139,24 @@ class Transaction:
     def __delitem__(self, key):
         del self.access_strategy[key]
 
+    def __len__(self):
+        return len(self.access_strategy)
+
+    def __iter__(self):
+        return iter(self.access_strategy)
+
     def commit(self):
-        self.journal.commit(transaction=self)
+        self.access_strategy.commit()
 
     def rollback(self):
-        self.journal.rollback(transaction=self)
+        self.access_strategy.rollback()
 
     def set_isolation_level(self, isolation_level: IsolationLevel) -> None:
         access_strategy = self.initialize_access_strategy(isolation_level)
         self.access_strategy = access_strategy
 
 
-class AccessStrategy(abc.ABC):
+class AccessStrategy(abc.ABC, collections.MutableMapping):
     def __init__(self, transaction: Transaction):
         self.transaction = transaction
 
@@ -159,49 +173,89 @@ class AccessStrategy(abc.ABC):
     def __setitem__(self, key, value):
         if not self.is_setitem_allowed(key=key):
             raise IntegrityError()
-        uncommitted_value = UncommittedValue(
+        uncommitted_item = UncommittedItem(
             value=value,
             transaction=self.transaction
         )
-        self.transaction.journal.uncommitted.set(
-            key=key,
-            value=uncommitted_value
-        )
+        self.transaction.journal.uncommitted[key] = uncommitted_item
 
     def is_setitem_allowed(self, key) -> bool:
         return (
-                key in self.transaction.journal.uncommitted
-                and self.transaction.journal.uncommitted.get(key=key).transaction != self.transaction
+                key not in self.transaction.journal.uncommitted
+                or self.transaction.journal.uncommitted[key].transaction is self.transaction
         )
 
     def __delitem__(self, key):
+        if key not in self or isinstance(self[key], Deleted):
+            raise KeyError()
         self[key] = Deleted()
+
+    def commit(self):
+        self.transaction.journal.commit(transaction=self.transaction)
+
+    def rollback(self):
+        self.transaction.journal.rollback(transaction=self.transaction)
 
 
 class ReadUncommittedAccessStrategy(AccessStrategy):
     def execute(self, item):
         try:
-            uncommitted_value = self.transaction.journal.uncommitted.get(key=item)
-            return uncommitted_value.value
+            uncommitted_item = self.transaction.journal.uncommitted[item]
+            return uncommitted_item.value
         except KeyError:
             committed_value = self.transaction.journal.committed.get(key=item)
             return committed_value
 
+    def __len__(self):
+        # TODO: реализовать
+        raise NotImplementedError()
+
+    def __iter__(self):
+        # TODO: реализовать
+        raise NotImplementedError()
+
 
 class ReadCommittedAccessStrategy(AccessStrategy):
     def execute(self, item):
-        committed_value = self.transaction.journal.committed.get(key=item)
-        return committed_value
+        try:
+            uncommitted_item = self.transaction.journal.uncommitted[item]
+        except KeyError:
+            committed_value = self.transaction.journal.committed.get(key=item)
+            return committed_value
+        else:
+            if uncommitted_item.transaction is not self.transaction:
+                raise KeyError()
+            return uncommitted_item.value
+
+    def __len__(self):
+        # TODO: реализовать
+        raise NotImplementedError()
+
+    def __iter__(self):
+        # TODO: реализовать
+        raise NotImplementedError()
 
 
 class SerializableAccessStrategy(AccessStrategy):
+    target_offset: int
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.update_target_offset()
+
+    def update_target_offset(self):
         self.target_offset = self.transaction.journal.committed.current_offset
 
     def execute(self, item):
-        committed_value = self.transaction.journal.committed.get(key=item, max_offset=self.target_offset)
-        return committed_value
+        try:
+            uncommitted_item = self.transaction.journal.uncommitted[item]
+        except KeyError:
+            committed_value = self.transaction.journal.committed.get(key=item, max_offset=self.target_offset)
+            return committed_value
+        else:
+            if uncommitted_item.transaction is not self.transaction:
+                raise KeyError()
+            return uncommitted_item.value
 
     def is_setitem_allowed(self, key) -> bool:
         try:
@@ -209,6 +263,22 @@ class SerializableAccessStrategy(AccessStrategy):
             return False
         except KeyError:
             return super().is_setitem_allowed(key=key)
+
+    def __len__(self):
+        # TODO: реализовать
+        raise NotImplementedError()
+
+    def __iter__(self):
+        # TODO: реализовать
+        raise NotImplementedError()
+
+    def commit(self):
+        super().commit()
+        self.update_target_offset()
+
+    def rollback(self):
+        super().rollback()
+        self.update_target_offset()
 
 
 class TransactionFactory:
@@ -223,9 +293,9 @@ class TransactionFactory:
         return transaction
 
 
-class TransactionDict:
+class TransactionDict(collections.MutableMapping):
     def __init__(self):
-        self.transaction_factory = TransactionFactory(
+        self._transaction_factory = TransactionFactory(
             journal=Journal()
         )
 
@@ -236,10 +306,24 @@ class TransactionDict:
     def __setitem__(self, key, value):
         with self.transaction(isolation_level=IsolationLevel.READ_COMMITTED) as transaction:
             transaction[key] = value
+            transaction.commit()
 
     def __delitem__(self, key):
         with self.transaction(isolation_level=IsolationLevel.READ_COMMITTED) as transaction:
             del transaction[key]
+            transaction.commit()
+
+    def __contains__(self, item):
+        with self.transaction(isolation_level=IsolationLevel.READ_COMMITTED) as transaction:
+            return item in transaction
+
+    def __iter__(self):
+        with self.transaction(isolation_level=IsolationLevel.READ_COMMITTED) as transaction:
+            return iter(transaction)
+
+    def __len__(self):
+        with self.transaction(isolation_level=IsolationLevel.READ_COMMITTED) as transaction:
+            return len(transaction)
 
     def transaction(self, isolation_level: IsolationLevel):
-        return self.transaction_factory.create_transaction(isolation_level=isolation_level)
+        return self._transaction_factory.create_transaction(isolation_level=isolation_level)
