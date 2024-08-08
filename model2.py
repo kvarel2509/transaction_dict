@@ -4,7 +4,8 @@ import abc
 import collections
 import dataclasses
 import enum
-from typing import Any, Hashable
+import bisect
+import itertools
 
 
 class IntegrityError(Exception):
@@ -15,94 +16,87 @@ class Deleted:
     pass
 
 
-@dataclasses.dataclass
-class UncommittedItem:
-    value: Any
-    transaction: Transaction
+class TransactionJournal(collections.UserDict):
+    pass
 
 
-class UncommittedJournal(collections.UserDict):
-    def __setitem__(self, key: Hashable, item: UncommittedItem):
-        assert isinstance(item, UncommittedItem), 'Value must be an instance of UncommittedItem'
-        super().__setitem__(key, item)
+class UncommittedPool(collections.UserDict):
+    data: dict[Transaction, TransactionJournal]
 
-    def pop_by_transaction(self, transaction: Transaction) -> dict[Hashable, UncommittedItem]:
-        taken = {}
-        rest = {}
-        for key, uncommitted_item in self.data.items():
-            if uncommitted_item.transaction is transaction:
-                taken[key] = uncommitted_item
-            else:
-                rest[key] = uncommitted_item
-        self.data = rest
-        return taken
+    def register_transaction(self, transaction: Transaction) -> None:
+        if transaction in self.data:
+            raise IntegrityError("Transaction journal already exists")
+        self.data[transaction] = TransactionJournal()
+
+    def delete_transaction(self, transaction: Transaction) -> None:
+        del self.data[transaction]
+
+    def execute_transaction_journal(self, transaction: Transaction) -> TransactionJournal:
+        journal = self.data[transaction]
+        self.data[transaction] = TransactionJournal()
+        return journal
 
 
 @dataclasses.dataclass
 class CommittedItem:
     offset: int
-    payload: dict
-    prev: CommittedItem = None
-
-    def __getitem__(self, key):
-        return self.payload[key]
+    payload: TransactionJournal
 
 
-class CommittedJournal:
-    def __init__(self):
-        self._current_offset = 0
-        self._item = CommittedItem(
-            offset=self._current_offset,
-            payload={}
-        )
+class Counter:
+    def __init__(self, start: int = 0, step: int = 1) -> None:
+        self._current = start
+        self._step = step
 
-    def commit(self, payload: dict):
-        self._current_offset += 1
-        self._item = CommittedItem(
-            offset=self._current_offset,
-            payload=payload,
-            prev=self._item
-        )
-
-    def get(self, key: Hashable, min_offset: int = 0, max_offset: int = None):
-        # TODO: заменить на использование срезов
-        max_offset = max_offset if max_offset is not None else self._current_offset
-        journal = self._item
-        while journal and journal.offset > max_offset:
-            journal = journal.prev
-        while journal and journal.offset >= min_offset:
-            try:
-                return journal[key]
-            except KeyError:
-                journal = journal.prev
-        raise KeyError()
-
-    def __iter__(self):
-        ...
-
-    def __len__(self):
-        ...
+    def shift(self):
+        self._current += self._step
 
     @property
-    def current_offset(self):
-        return self._current_offset
+    def current(self):
+        return self._current
+
+
+class CommittedPool:
+    items: list[CommittedItem]
+
+    def __init__(self):
+        self._offset_counter = Counter(start=-1)
+        self.items = []
+        self.commit(journal=TransactionJournal())
+
+    def commit(self, journal: TransactionJournal):
+        self._offset_counter.shift()
+        self.items.append(
+            CommittedItem(
+                offset=self.last_offset,
+                payload=journal
+            )
+        )
+
+    @property
+    def last_offset(self):
+        return self._offset_counter.current
 
 
 class Journal:
     def __init__(self):
-        self.committed = CommittedJournal()
-        self.uncommitted = UncommittedJournal()
+        self._committed_pool = CommittedPool()
+        self._uncommitted_pool = UncommittedPool()
 
     def commit(self, transaction: Transaction):
-        uncommitted_items_map = self.uncommitted.pop_by_transaction(transaction=transaction)
-        payload = {
-            key: uncommitted_item.value
-            for key, uncommitted_item in uncommitted_items_map.items()
-        }
-        self.committed.commit(payload=payload)
+        transaction_journal = self.uncommitted_pool.execute_transaction_journal(transaction=transaction)
+        self.committed_pool.commit(journal=transaction_journal)
 
     def rollback(self, transaction: Transaction):
-        self.uncommitted.pop_by_transaction(transaction=transaction)
+        self.uncommitted_pool.execute_transaction_journal(transaction=transaction)
+
+    @property
+    def committed_pool(self):
+        return self._committed_pool
+
+    @property
+    def uncommitted_pool(self):
+        return self._uncommitted_pool
 
 
 class IsolationLevel(enum.Enum):
@@ -111,132 +105,96 @@ class IsolationLevel(enum.Enum):
     SERIALIZABLE = 'serializable'
 
 
-class Transaction(collections.MutableMapping):
-    def __init__(self, journal: Journal, isolation_level: IsolationLevel):
+class Transaction(abc.ABC, collections.abc.MutableMapping):
+    def __init__(self, journal: Journal):
         self.journal = journal
-        self.access_strategy: AccessStrategy = self.initialize_access_strategy(isolation_level=isolation_level)
-
-    def initialize_access_strategy(self, isolation_level: IsolationLevel) -> AccessStrategy:
-        if isolation_level == IsolationLevel.READ_UNCOMMITTED:
-            return ReadUncommittedAccessStrategy(transaction=self)
-        elif isolation_level == IsolationLevel.READ_COMMITTED:
-            return ReadCommittedAccessStrategy(transaction=self)
-        elif isolation_level == IsolationLevel.SERIALIZABLE:
-            return SerializableAccessStrategy(transaction=self)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args, **kwargs):
-        self.rollback()
 
     def __getitem__(self, item):
-        return self.access_strategy[item]
-
-    def __setitem__(self, key, value):
-        self.access_strategy[key] = value
-
-    def __delitem__(self, key):
-        del self.access_strategy[key]
-
-    def __len__(self):
-        return len(self.access_strategy)
-
-    def __iter__(self):
-        return iter(self.access_strategy)
-
-    def commit(self):
-        self.access_strategy.commit()
-
-    def rollback(self):
-        self.access_strategy.rollback()
-
-    def set_isolation_level(self, isolation_level: IsolationLevel) -> None:
-        access_strategy = self.initialize_access_strategy(isolation_level)
-        self.access_strategy = access_strategy
-
-
-class AccessStrategy(abc.ABC, collections.MutableMapping):
-    def __init__(self, transaction: Transaction):
-        self.transaction = transaction
-
-    def __getitem__(self, item):
-        value = self.execute(item)
+        value = self.state[item]
         if isinstance(value, Deleted):
             raise KeyError()
         return value
 
+    @property
     @abc.abstractmethod
-    def execute(self, item) -> Any:
+    def state(self) -> collections.Mapping:
         ...
 
     def __setitem__(self, key, value):
         if not self.is_setitem_allowed(key=key):
             raise IntegrityError()
-        uncommitted_item = UncommittedItem(
-            value=value,
-            transaction=self.transaction
-        )
-        self.transaction.journal.uncommitted[key] = uncommitted_item
+        self.journal.uncommitted_pool[self][key] = value
 
     def is_setitem_allowed(self, key) -> bool:
         return (
-                key not in self.transaction.journal.uncommitted
-                or self.transaction.journal.uncommitted[key].transaction is self.transaction
+                key in self.journal.uncommitted_pool[self]
+                or key not in itertools.chain(*self.journal.uncommitted_pool.values())
         )
 
     def __delitem__(self, key):
-        if key not in self or isinstance(self[key], Deleted):
+        if key in self and self.is_setitem_allowed(key=key):
+            self[key] = Deleted()
+        else:
             raise KeyError()
-        self[key] = Deleted()
+
+    def __contains__(self, item):
+        try:
+            _ = self[item]
+            return True
+        except KeyError:
+            return False
+
+    def __iter__(self):
+        return iter(self.state)
+    
+    def __len__(self):
+        return len(self.state)
 
     def commit(self):
-        self.transaction.journal.commit(transaction=self.transaction)
+        self.journal.commit(transaction=self)
 
     def rollback(self):
-        self.transaction.journal.rollback(transaction=self.transaction)
+        self.journal.rollback(transaction=self)
+
+    def __hash__(self):
+        return id(self)
+
+    def __eq__(self, other):
+        return self is other
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.end()
+
+    def start(self):
+        self.journal.uncommitted_pool.register_transaction(transaction=self)
+
+    def end(self):
+        self.journal.uncommitted_pool.delete_transaction(transaction=self)
 
 
-class ReadUncommittedAccessStrategy(AccessStrategy):
-    def execute(self, item):
-        try:
-            uncommitted_item = self.transaction.journal.uncommitted[item]
-            return uncommitted_item.value
-        except KeyError:
-            committed_value = self.transaction.journal.committed.get(key=item)
-            return committed_value
-
-    def __len__(self):
-        # TODO: реализовать
-        raise NotImplementedError()
-
-    def __iter__(self):
-        # TODO: реализовать
-        raise NotImplementedError()
+class ReadUncommittedTransaction(Transaction):
+    @property
+    def state(self) -> collections.ChainMap:
+        return collections.ChainMap(
+            *self.journal.uncommitted_pool.values(),
+            *(i.payload for i in reversed(self.journal.committed_pool.items)),
+        )
 
 
-class ReadCommittedAccessStrategy(AccessStrategy):
-    def execute(self, item):
-        try:
-            uncommitted_item = self.transaction.journal.uncommitted[item]
-        except KeyError:
-            committed_value = self.transaction.journal.committed.get(key=item)
-            return committed_value
-        else:
-            if uncommitted_item.transaction is not self.transaction:
-                raise KeyError()
-            return uncommitted_item.value
-
-    def __len__(self):
-        # TODO: реализовать
-        raise NotImplementedError()
-
-    def __iter__(self):
-        # TODO: реализовать
-        raise NotImplementedError()
+class ReadCommittedTransaction(Transaction):
+    @property
+    def state(self) -> collections.ChainMap:
+        return collections.ChainMap(
+            self.journal.uncommitted_pool[self],
+            *(i.payload for i in reversed(self.journal.committed_pool.items)),
+        )
 
 
-class SerializableAccessStrategy(AccessStrategy):
+class SerializableTransaction(Transaction):
     target_offset: int
 
     def __init__(self, *args, **kwargs):
@@ -244,33 +202,31 @@ class SerializableAccessStrategy(AccessStrategy):
         self.update_target_offset()
 
     def update_target_offset(self):
-        self.target_offset = self.transaction.journal.committed.current_offset
+        self.target_offset = self.journal.committed_pool.last_offset
 
-    def execute(self, item):
-        try:
-            uncommitted_item = self.transaction.journal.uncommitted[item]
-        except KeyError:
-            committed_value = self.transaction.journal.committed.get(key=item, max_offset=self.target_offset)
-            return committed_value
-        else:
-            if uncommitted_item.transaction is not self.transaction:
-                raise KeyError()
-            return uncommitted_item.value
+    @property
+    def state(self) -> collections.ChainMap:
+        boarder = bisect.bisect_right(
+            self.journal.committed_pool.items,
+            self.target_offset,
+            key=lambda x: x.offset
+        )
+        return collections.ChainMap(
+            self.journal.uncommitted_pool[self],
+            collections.ChainMap(*(i.payload for i in self.journal.committed_pool.items[boarder-1::-1]))
+        )
 
     def is_setitem_allowed(self, key) -> bool:
+        boarder = bisect.bisect_left(
+            self.journal.committed_pool.items,
+            self.target_offset,
+            key=lambda x: x.offset
+        )
         try:
-            self.transaction.journal.committed.get(key=key, min_offset=self.target_offset)
+            _ = collections.ChainMap(*(i.payload for i in self.journal.committed_pool.items[boarder:]))[key]
             return False
         except KeyError:
             return super().is_setitem_allowed(key=key)
-
-    def __len__(self):
-        # TODO: реализовать
-        raise NotImplementedError()
-
-    def __iter__(self):
-        # TODO: реализовать
-        raise NotImplementedError()
 
     def commit(self):
         super().commit()
@@ -286,14 +242,18 @@ class TransactionFactory:
         self.journal = journal
 
     def create_transaction(self, isolation_level: IsolationLevel) -> Transaction:
-        transaction = Transaction(
-            journal=self.journal,
-            isolation_level=isolation_level
-        )
-        return transaction
+        match isolation_level:
+            case IsolationLevel.READ_UNCOMMITTED:
+                return ReadUncommittedTransaction(self.journal)
+            case IsolationLevel.READ_COMMITTED:
+                return ReadCommittedTransaction(self.journal)
+            case IsolationLevel.SERIALIZABLE:
+                return SerializableTransaction(self.journal)
+            case _:
+                raise NotImplementedError()
 
 
-class TransactionDict(collections.MutableMapping):
+class TransactionDict(collections.abc.MutableMapping):
     def __init__(self):
         self._transaction_factory = TransactionFactory(
             journal=Journal()
@@ -325,5 +285,5 @@ class TransactionDict(collections.MutableMapping):
         with self.transaction(isolation_level=IsolationLevel.READ_COMMITTED) as transaction:
             return len(transaction)
 
-    def transaction(self, isolation_level: IsolationLevel):
+    def transaction(self, isolation_level: IsolationLevel) -> Transaction:
         return self._transaction_factory.create_transaction(isolation_level=isolation_level)
