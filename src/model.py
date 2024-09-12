@@ -9,7 +9,8 @@ from typing import Any
 
 
 class Void:
-    pass
+    def __eq__(self, other: Any) -> bool:
+        return isinstance(other, Void)
 
 
 class Journal(Mapping, abc.ABC):
