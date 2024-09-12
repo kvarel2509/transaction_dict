@@ -35,6 +35,8 @@ class TransactionTestsMixin:
             )
         )
 
+
+class CommonTransactionTestCase(TransactionTestsMixin):
     def test_cannot_occur_lost_update_when_concurrent_rewrite_diff_values(self):
         self.transaction1[self.key1] = self.value2
         self.transaction2[self.key1] = self.value3
@@ -79,7 +81,7 @@ class TransactionTestsMixin:
         self.assertEqual(self.transaction1[self.key1], self.value1)
 
 
-class ReadCommittedTransactionTestCase(TransactionTestsMixin, TestCase):
+class ReadCommittedTransactionTestCase(CommonTransactionTestCase, TransactionTestsMixin, TestCase):
     isolation_level = IsolationLevel.READ_COMMITTED
 
     def test_can_occur_non_repeatable_read(self):
@@ -94,7 +96,7 @@ class ReadCommittedTransactionTestCase(TransactionTestsMixin, TestCase):
         self.assertEqual(self.transaction1[self.key3], self.value3)
 
 
-class RepeatableReadTransactionTestCase(TransactionTestsMixin, TestCase):
+class RepeatableReadTransactionTestCase(CommonTransactionTestCase, TransactionTestsMixin, TestCase):
     isolation_level = IsolationLevel.REPEATABLE_READ
 
     def test_cannot_occur_non_repeatable_read(self):
@@ -108,7 +110,7 @@ class RepeatableReadTransactionTestCase(TransactionTestsMixin, TestCase):
         self.assertNotIn(self.key3, self.transaction1)
 
 
-class SerializableTransactionTestCase(TransactionTestsMixin, TestCase):
+class SerializableTransactionTestCase(CommonTransactionTestCase, TransactionTestsMixin, TestCase):
     isolation_level = IsolationLevel.SERIALIZABLE
 
     def test_cannot_occur_non_repeatable_read(self):
