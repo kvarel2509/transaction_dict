@@ -8,7 +8,7 @@ from tests.generic import TransactionTestsMixin
 factory = InMemoryJournalRepositoryFactory()
 
 
-class MultiVersionTransactionTestsMixin(TransactionTestsMixin):
+class MultiVersionStrategyTransactionTestsMixin(TransactionTestsMixin):
     def get_transaction_dict(self) -> TransactionDict:
         return TransactionDict(
             transaction_factory=MultiVersionStrategyTransactionFactory(
@@ -17,7 +17,7 @@ class MultiVersionTransactionTestsMixin(TransactionTestsMixin):
         )
 
 
-class CommonTransactionTestCase(MultiVersionTransactionTestsMixin):
+class CommonTransactionTestCase(MultiVersionStrategyTransactionTestsMixin):
     def test_cannot_occur_lost_update_when_concurrent_rewrite_diff_values(self):
         self.transaction1[self.key1] = self.value2
         self.transaction2[self.key1] = self.value3
@@ -62,7 +62,7 @@ class CommonTransactionTestCase(MultiVersionTransactionTestsMixin):
         self.assertEqual(self.transaction1[self.key1], self.value1)
 
 
-class ReadCommittedTransactionTestCase(CommonTransactionTestCase, MultiVersionTransactionTestsMixin, TestCase):
+class ReadCommittedTransactionTestCase(CommonTransactionTestCase, MultiVersionStrategyTransactionTestsMixin, TestCase):
     isolation_level = IsolationLevel.READ_COMMITTED
 
     def test_can_occur_non_repeatable_read(self):
@@ -77,7 +77,7 @@ class ReadCommittedTransactionTestCase(CommonTransactionTestCase, MultiVersionTr
         self.assertEqual(self.transaction1[self.key3], self.value3)
 
 
-class RepeatableReadTransactionTestCase(CommonTransactionTestCase, MultiVersionTransactionTestsMixin, TestCase):
+class RepeatableReadTransactionTestCase(CommonTransactionTestCase, MultiVersionStrategyTransactionTestsMixin, TestCase):
     isolation_level = IsolationLevel.REPEATABLE_READ
 
     def test_cannot_occur_non_repeatable_read(self):
@@ -91,7 +91,7 @@ class RepeatableReadTransactionTestCase(CommonTransactionTestCase, MultiVersionT
         self.assertNotIn(self.key3, self.transaction1)
 
 
-class SerializableTransactionTestCase(CommonTransactionTestCase, MultiVersionTransactionTestsMixin, TestCase):
+class SerializableTransactionTestCase(CommonTransactionTestCase, MultiVersionStrategyTransactionTestsMixin, TestCase):
     isolation_level = IsolationLevel.SERIALIZABLE
 
     def test_cannot_occur_non_repeatable_read(self):

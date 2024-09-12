@@ -103,6 +103,15 @@ class RepeatableReadLockStrategyTransaction(LockStrategyTransaction):
         self.access_protector.add_key_lock(transaction=self, key=item)
         return super().__getitem__(item)
 
+    def __contains__(self, item):
+        self.access_protector.add_key_lock(transaction=item, key=item)
+        return super().__contains__(item)
+
+    def __iter__(self):
+        for key in super().__iter__():
+            self.access_protector.add_key_lock(transaction=self, key=key)
+            yield key
+
 
 class SerializableLockStrategyTransaction(LockStrategyTransaction):
     @property
@@ -113,6 +122,10 @@ class SerializableLockStrategyTransaction(LockStrategyTransaction):
                 self.journal_repository.get_committed_journal()
             )
         )
+
+    def __contains__(self, item):
+        self.access_protector.add_key_lock(transaction=item, key=item)
+        return super().__contains__(item)
 
     def __getitem__(self, item):
         self.access_protector.add_key_lock(transaction=self, key=item)
