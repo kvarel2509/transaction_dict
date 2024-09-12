@@ -1,33 +1,14 @@
 from unittest import TestCase
 
+from src.exceptions import SerializationError
 from src.factory import InMemoryJournalRepositoryFactory, MultiVersionStrategyTransactionFactory
 from src.model import TransactionDict, IsolationLevel
-from src.exceptions import SerializationError
+from tests.generic import TransactionTestsMixin
 
 factory = InMemoryJournalRepositoryFactory()
 
 
-class TransactionTestsMixin:
-    isolation_level: IsolationLevel
-
-    def setUp(self):
-        self.key1 = 'test_key1'
-        self.key2 = 'test_key2'
-        self.key3 = 'test_key3'
-        self.key4 = 'test_key4'
-        self.value1 = 'test_value1'
-        self.value2 = 'test_value2'
-        self.value3 = 'test_value3'
-        self.value4 = 'test_value4'
-        transaction_dict = self.get_transaction_dict()
-        transaction_dict[self.key1] = self.value1
-        transaction_dict[self.key2] = self.value2
-        self.transaction1 = transaction_dict.create_transaction(isolation_level=self.isolation_level)
-        self.transaction2 = transaction_dict.create_transaction(isolation_level=self.isolation_level)
-        self.transaction1.start()
-        self.transaction2.start()
-        super().setUp()
-
+class MultiVersionTransactionTestsMixin(TransactionTestsMixin):
     def get_transaction_dict(self) -> TransactionDict:
         return TransactionDict(
             transaction_factory=MultiVersionStrategyTransactionFactory(
@@ -36,7 +17,7 @@ class TransactionTestsMixin:
         )
 
 
-class CommonTransactionTestCase(TransactionTestsMixin):
+class CommonTransactionTestCase(MultiVersionTransactionTestsMixin):
     def test_cannot_occur_lost_update_when_concurrent_rewrite_diff_values(self):
         self.transaction1[self.key1] = self.value2
         self.transaction2[self.key1] = self.value3
@@ -81,7 +62,7 @@ class CommonTransactionTestCase(TransactionTestsMixin):
         self.assertEqual(self.transaction1[self.key1], self.value1)
 
 
-class ReadCommittedTransactionTestCase(CommonTransactionTestCase, TransactionTestsMixin, TestCase):
+class ReadCommittedTransactionTestCase(CommonTransactionTestCase, MultiVersionTransactionTestsMixin, TestCase):
     isolation_level = IsolationLevel.READ_COMMITTED
 
     def test_can_occur_non_repeatable_read(self):
@@ -96,7 +77,7 @@ class ReadCommittedTransactionTestCase(CommonTransactionTestCase, TransactionTes
         self.assertEqual(self.transaction1[self.key3], self.value3)
 
 
-class RepeatableReadTransactionTestCase(CommonTransactionTestCase, TransactionTestsMixin, TestCase):
+class RepeatableReadTransactionTestCase(CommonTransactionTestCase, MultiVersionTransactionTestsMixin, TestCase):
     isolation_level = IsolationLevel.REPEATABLE_READ
 
     def test_cannot_occur_non_repeatable_read(self):
@@ -110,7 +91,7 @@ class RepeatableReadTransactionTestCase(CommonTransactionTestCase, TransactionTe
         self.assertNotIn(self.key3, self.transaction1)
 
 
-class SerializableTransactionTestCase(CommonTransactionTestCase, TransactionTestsMixin, TestCase):
+class SerializableTransactionTestCase(CommonTransactionTestCase, MultiVersionTransactionTestsMixin, TestCase):
     isolation_level = IsolationLevel.SERIALIZABLE
 
     def test_cannot_occur_non_repeatable_read(self):
