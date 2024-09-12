@@ -61,10 +61,6 @@ class MultiVersionStrategyTransactionFactory(TransactionFactory):
 
     def create_transaction(self, isolation_level: IsolationLevel) -> Transaction:
         match isolation_level:
-            case IsolationLevel.READ_UNCOMMITTED:
-                return ReadUncommittedMultiVersionStrategyTransaction(
-                    journal_repository=self._journal_repository,
-                )
             case IsolationLevel.READ_COMMITTED:
                 return ReadCommittedMultiVersionStrategyTransaction(
                     journal_repository=self._journal_repository,

@@ -32,17 +32,6 @@ class MultiVersionStrategyTransaction(Transaction, abc.ABC):
                 raise SerializationError()
 
 
-class ReadUncommittedMultiVersionStrategyTransaction(MultiVersionStrategyTransaction):
-    @property
-    def state(self) -> CompositeJournal:
-        return CompositeJournal(
-            journals=(
-                self.journal_repository.get_aggregated_uncommitted_journal(),
-                self.journal_repository.get_committed_journal()
-            )
-        )
-
-
 class ReadCommittedMultiVersionStrategyTransaction(MultiVersionStrategyTransaction):
     @property
     def state(self) -> CompositeJournal:
