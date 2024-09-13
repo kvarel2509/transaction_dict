@@ -83,7 +83,7 @@ class AccessProtectorTestCase(LockStrategyTransactionTestsMixin, TestCase):
         self.assertIsNone(self.access_protector.add_key_lock(transaction=self.transaction2, key=self.key1))
 
 
-class CommonTransactionTestCase(LockStrategyTransactionTestsMixin):
+class LostUpdateTestCase(LockStrategyTransactionTestsMixin):
     def test_cannot_occur_lost_update(self):
         self.transaction1[self.key1] = self.value2
         first_read = self.transaction1[self.key1]
@@ -96,7 +96,35 @@ class CommonTransactionTestCase(LockStrategyTransactionTestsMixin):
         self.assertEqual(second_read, self.value2)
 
 
-class ReadUncommittedTransactionTestCase(CommonTransactionTestCase, LockStrategyTransactionTestsMixin, TestCase):
+class NonRepeatableReadTestCase(LockStrategyTransactionTestsMixin):
+    def test_cannot_occur_non_repeatable_read_when_write_after_read_key(self):
+        _ = self.transaction1[self.key1]
+        with self.assertRaises(AccessError):
+            self.transaction2[self.key1] = self.value2
+
+    def test_cannot_occur_non_repeatable_read_when_write_after_read_new_key(self):
+        with self.assertRaises(KeyError):
+            _ = self.transaction1[self.key3]
+        with self.assertRaises(AccessError):
+            self.transaction2[self.key3] = self.value2
+
+    def test_cannot_occur_non_repeatable_read_when_delete_after_read_key(self):
+        _ = self.transaction1[self.key1]
+        with self.assertRaises(AccessError):
+            del self.transaction2[self.key1]
+
+    def test_cannot_occur_non_repeatable_read_when_write_after_positive_check_contains(self):
+        self.assertTrue(self.key1 in self.transaction1)
+        with self.assertRaises(AccessError):
+            self.transaction2[self.key1] = self.value2
+
+    def test_cannot_occur_non_repeatable_read_when_write_after_negative_check_contains(self):
+        self.assertFalse(self.key3 in self.transaction1)
+        with self.assertRaises(AccessError):
+            self.transaction2[self.key3] = self.value2
+
+
+class ReadUncommittedTransactionTestCase(LostUpdateTestCase, LockStrategyTransactionTestsMixin, TestCase):
     isolation_level = IsolationLevel.READ_UNCOMMITTED
 
     def test_can_occur_dirty_read(self):
@@ -128,7 +156,7 @@ class ReadUncommittedTransactionTestCase(CommonTransactionTestCase, LockStrategy
         self.assertEqual(second_read, first_read + 1)
 
 
-class ReadCommittedTransactionTestCase(CommonTransactionTestCase, LockStrategyTransactionTestsMixin, TestCase):
+class ReadCommittedTransactionTestCase(LostUpdateTestCase, LockStrategyTransactionTestsMixin, TestCase):
     isolation_level = IsolationLevel.READ_COMMITTED
 
     def test_cannot_occur_dirty_read(self):
@@ -154,19 +182,32 @@ class ReadCommittedTransactionTestCase(CommonTransactionTestCase, LockStrategyTr
         self.assertEqual(second_read, first_read + 1)
 
 
-class RepeatableReadTransactionTestCase(CommonTransactionTestCase, LockStrategyTransactionTestsMixin, TestCase):
+class RepeatableReadTransactionTestCase(LostUpdateTestCase,
+                                        NonRepeatableReadTestCase,
+                                        LockStrategyTransactionTestsMixin,
+                                        TestCase):
     isolation_level = IsolationLevel.REPEATABLE_READ
 
-    def test_cannot_occur_non_repeatable_read(self):
-        first_read = self.transaction1[self.key1]
+    def test_cannot_occur_non_repeatable_read_when_rewrite_key_after_full_iter(self):
+        _ = list(self.transaction1)
         with self.assertRaises(AccessError):
             self.transaction2[self.key1] = self.value2
-            self.transaction2.commit()
-        second_read = self.transaction1[self.key1]
-        self.assertEqual(first_read, self.value1)
-        self.assertEqual(second_read, self.value1)
 
-    def test_can_occur_phantoms_read(self):
+    def test_cannot_occur_non_repeatable_read_when_rewrite_key_after_part_iter(self):
+        it = iter(self.transaction1)
+        key = next(it)
+        self.assertEqual(key, self.key1)
+        with self.assertRaises(AccessError):
+            self.transaction2[self.key2] = self.value2
+
+    def test_can_occur_phantoms_read_when_write_new_key_after_full_iter(self):
+        first_read = list(self.transaction1)
+        self.transaction2[self.key3] = self.value3
+        self.transaction2.commit()
+        second_read = list(self.transaction1)
+        self.assertNotEqual(first_read, second_read)
+
+    def test_can_occur_phantoms_read_when_write_new_key_after_check_len(self):
         first_read = len(self.transaction1)
         self.transaction2[self.key3] = self.value3
         self.transaction2.commit()
@@ -174,38 +215,40 @@ class RepeatableReadTransactionTestCase(CommonTransactionTestCase, LockStrategyT
         self.assertEqual(second_read, first_read + 1)
 
 
-class SerializableTransactionTestCase(CommonTransactionTestCase, LockStrategyTransactionTestsMixin, TestCase):
+class SerializableTransactionTestCase(LostUpdateTestCase,
+                                      NonRepeatableReadTestCase,
+                                      LockStrategyTransactionTestsMixin,
+                                      TestCase):
     isolation_level = IsolationLevel.SERIALIZABLE
 
-    def test_cannot_occur_non_repeatable_read(self):
-        first_read = self.transaction1[self.key1]
+    def test_cannot_occur_phantoms_read_when_write_new_key_after_check_len(self):
+        _ = len(self.transaction1)
         with self.assertRaises(AccessError):
-            self.transaction2[self.key1] = self.value2
-            self.transaction2.commit()
-        second_read = self.transaction1[self.key1]
-        self.assertEqual(first_read, self.value1)
-        self.assertEqual(second_read, self.value1)
+            self.transaction2[self.key3] = self.value3
 
     def test_cannot_occur_phantoms_read_when_rewrite_key_after_check_len(self):
-        first_read = len(self.transaction1)
+        _ = len(self.transaction1)
         with self.assertRaises(AccessError):
             self.transaction2[self.key2] = self.value2
-            self.transaction2.commit()
-        second_read = len(self.transaction1)
-        self.assertEqual(first_read, second_read)
 
-    def test_cannot_occur_phantoms_read_when_write_new_key_after_check_len(self):
-        first_read = len(self.transaction1)
+    def test_cannot_occur_phantoms_read_when_write_new_key_after_full_iter(self):
+        first_read = list(self.transaction1)
         with self.assertRaises(AccessError):
             self.transaction2[self.key3] = self.value3
-            self.transaction2.commit()
-        second_read = len(self.transaction1)
-        self.assertEqual(first_read, second_read)
 
-    def test_cannot_occur_phantoms_read_when_new_key_after_iter(self):
-        first_read = len(self.transaction1)
+    def test_cannot_occur_phantoms_read_when_rewrite_key_after_full_iter(self):
+        _ = list(self.transaction1)
+        with self.assertRaises(AccessError):
+            self.transaction2[self.key2] = self.value3
+
+    def test_cannot_occur_phantoms_read_when_write_new_key_after_part_iter(self):
+        it = iter(self.transaction1)
+        _ = next(it)
         with self.assertRaises(AccessError):
             self.transaction2[self.key3] = self.value3
-            self.transaction2.commit()
-        second_read = len(self.transaction1)
-        self.assertEqual(first_read, second_read)
+
+    def test_cannot_occur_phantoms_read_when_rewrite_key_after_part_iter(self):
+        it = iter(self.transaction1)
+        _ = next(it)
+        with self.assertRaises(AccessError):
+            self.transaction2[self.key2] = self.value2

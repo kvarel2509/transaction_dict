@@ -6,7 +6,11 @@ class TransactionException(TransactionDictException):
     pass
 
 
-class AccessError(TransactionException):
+class AccessProtectorException(TransactionException):
+    pass
+
+
+class AccessError(AccessProtectorException):
     pass
 
 

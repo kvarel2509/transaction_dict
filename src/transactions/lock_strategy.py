@@ -108,9 +108,11 @@ class RepeatableReadLockStrategyTransaction(LockStrategyTransaction):
         return super().__contains__(item)
 
     def __iter__(self):
+        keys = []
         for key in super().__iter__():
             self.access_protector.add_key_lock(transaction=self, key=key)
-            yield key
+            keys.append(key)
+        return iter(keys)
 
 
 class SerializableLockStrategyTransaction(LockStrategyTransaction):
@@ -123,13 +125,13 @@ class SerializableLockStrategyTransaction(LockStrategyTransaction):
             )
         )
 
-    def __contains__(self, item):
-        self.access_protector.add_key_lock(transaction=item, key=item)
-        return super().__contains__(item)
-
     def __getitem__(self, item):
         self.access_protector.add_key_lock(transaction=self, key=item)
         return super().__getitem__(item)
+
+    def __contains__(self, item):
+        self.access_protector.add_key_lock(transaction=item, key=item)
+        return super().__contains__(item)
 
     def __iter__(self):
         self.access_protector.add_full_lock(transaction=self)
