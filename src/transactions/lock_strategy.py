@@ -67,6 +67,25 @@ class LockStrategyTransaction(Transaction, abc.ABC):
         self.journal_repository.delete_uncommitted_journal(transaction=self)
 
 
+class AutoCommitLockStrategyTransaction(LockStrategyTransaction):
+    @property
+    def state(self) -> CompositeJournal:
+        return CompositeJournal(
+            journals=(
+                self.journal_repository.get_uncommitted_journal_by_transaction(transaction=self),
+                self.journal_repository.get_committed_journal()
+            )
+        )
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self.commit()
+
+    def __delitem__(self, key):
+        super().__delitem__(key)
+        self.commit()
+
+
 class ReadUncommittedLockStrategyTransaction(LockStrategyTransaction):
     @property
     def state(self) -> CompositeJournal:
