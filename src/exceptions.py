@@ -20,3 +20,7 @@ class SerializationError(TransactionException):
 
 class RepositoryError(TransactionDictException):
     pass
+
+
+class SessionError(TransactionDictException):
+    pass

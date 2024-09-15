@@ -2,7 +2,8 @@ from unittest import TestCase
 
 from src.exceptions import AccessError
 from src.factory import InMemoryJournalRepositoryFactory, LockStrategyTransactionFactory
-from src.model import TransactionDict, IsolationLevel
+from src.domain.core import IsolationLevel
+from src.entrypoints.locallib.transaction_dict import TransactionDict
 from src.transactions.lock_strategy import AccessProtector
 from tests.generic import TransactionTestsMixin
 

@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import abc
-import collections
 import dataclasses
 import enum
-from collections.abc import MutableMapping, Mapping, Iterable, Hashable
-from typing import Any
+from typing import Any, Mapping, Hashable, MutableMapping
 
 
 class Void:
@@ -15,57 +13,6 @@ class Void:
 
 class Journal(Mapping, abc.ABC):
     pass
-
-
-class LeafJournal(Journal):
-    def __init__(self, journal: Journal) -> None:
-        self.journal = journal
-
-    def __getitem__(self, item):
-        return self.journal[item]
-
-    def __len__(self):
-        return len(self.journal)
-
-    def __iter__(self):
-        return iter(self.journal)
-
-
-class CompositeJournal(Journal):
-    def __init__(self, journals: Iterable[Journal]) -> None:
-        self.journal = collections.ChainMap(*journals)
-
-    def __getitem__(self, item):
-        return self.journal[item]
-
-    def __len__(self):
-        return len(self.journal)
-
-    def __iter__(self):
-        return iter(self.journal)
-
-
-class MutableJournal(Journal):
-    def __init__(self):
-        self.journal = {}
-
-    def __getitem__(self, item):
-        return self.journal[item]
-
-    def __len__(self):
-        return len(self.journal)
-
-    def __iter__(self):
-        return iter(self.journal)
-
-    def __setitem__(self, key, value):
-        self.journal[key] = value
-
-    def __delitem__(self, key):
-        del self.journal[key]
-
-    def clear(self):
-        self.journal = {}
 
 
 class UncommittedRepository(abc.ABC):
@@ -261,37 +208,3 @@ class TransactionFactory(abc.ABC):
     @abc.abstractmethod
     def create_transaction(self, isolation_level: IsolationLevel) -> Transaction:
         ...
-
-
-class TransactionDict(MutableMapping):
-    def __init__(self, transaction_factory: TransactionFactory):
-        self.transaction_factory = transaction_factory
-
-    def __getitem__(self, item):
-        with self.create_transaction(isolation_level=IsolationLevel.READ_COMMITTED) as transaction:
-            return transaction[item]
-
-    def __setitem__(self, key, value):
-        with self.create_transaction(isolation_level=IsolationLevel.READ_COMMITTED) as transaction:
-            transaction[key] = value
-            transaction.commit()
-
-    def __delitem__(self, key):
-        with self.create_transaction(isolation_level=IsolationLevel.READ_COMMITTED) as transaction:
-            del transaction[key]
-            transaction.commit()
-
-    def __contains__(self, item):
-        with self.create_transaction(isolation_level=IsolationLevel.READ_COMMITTED) as transaction:
-            return item in transaction
-
-    def __iter__(self):
-        with self.create_transaction(isolation_level=IsolationLevel.READ_COMMITTED) as transaction:
-            return iter(transaction)
-
-    def __len__(self):
-        with self.create_transaction(isolation_level=IsolationLevel.READ_COMMITTED) as transaction:
-            return len(transaction)
-
-    def create_transaction(self, isolation_level: IsolationLevel) -> Transaction:
-        return self.transaction_factory.create_transaction(isolation_level=isolation_level)

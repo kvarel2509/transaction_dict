@@ -1,7 +1,8 @@
 import abc
 
 from src.exceptions import SerializationError
-from src.model import Transaction, JournalRepository, CompositeJournal, Journal, Void
+from src.journals.journals import CompositeJournal
+from src.domain.core import Void, Journal, JournalRepository, Transaction
 
 
 class MultiVersionStrategyTransaction(Transaction, abc.ABC):
@@ -30,25 +31,6 @@ class MultiVersionStrategyTransaction(Transaction, abc.ABC):
         for key in transaction_journal:
             if key in ahead_journal and ahead_journal[key] != transaction_journal[key]:
                 raise SerializationError()
-
-
-class AutoCommitMultiVersionStrategyTransaction(MultiVersionStrategyTransaction):
-    @property
-    def state(self) -> CompositeJournal:
-        return CompositeJournal(
-            journals=(
-                self.journal_repository.get_uncommitted_journal_by_transaction(transaction=self),
-                self.journal_repository.get_committed_journal()
-            )
-        )
-
-    def __setitem__(self, key, value):
-        super().__setitem__(key, value)
-        self.commit()
-
-    def __delitem__(self, key):
-        super().__delitem__(key)
-        self.commit()
 
 
 class ReadCommittedMultiVersionStrategyTransaction(MultiVersionStrategyTransaction):
