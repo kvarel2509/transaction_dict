@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import bisect
 
-from src.journals.journals import CompositeJournal
+from src.generics.journals import CompositeJournal
 from src.domain.core import Journal, CommittedItem, Counter, CommittedRepository
 
 

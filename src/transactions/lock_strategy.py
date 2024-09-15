@@ -2,7 +2,7 @@ import abc
 from typing import Hashable
 
 from src.exceptions import AccessError
-from src.journals.journals import CompositeJournal
+from src.generics.journals import CompositeJournal
 from src.domain.core import JournalRepository, Transaction
 
 

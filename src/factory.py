@@ -1,7 +1,7 @@
 import abc
 
-from src.journals.committed_pools import InMemoryCommittedRepository
-from src.journals.uncommitted_pools import InMemoryUncommittedRepository
+from src.adapters.committed_repositories import InMemoryCommittedRepository
+from src.adapters.uncommitted_repositories import InMemoryUncommittedRepository
 from src.domain.core import JournalRepository, IsolationLevel, Transaction, TransactionFactory
 from src.transactions.lock_strategy import ReadUncommittedLockStrategyTransaction, ReadCommittedLockStrategyTransaction, \
     RepeatableReadLockStrategyTransaction, SerializableLockStrategyTransaction, AccessProtector
