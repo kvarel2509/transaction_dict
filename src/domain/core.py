@@ -133,47 +133,10 @@ class JournalRepository:
 
 
 class IsolationLevel(enum.Enum):
-    AUTO_COMMIT = 'auto_commit'
     READ_UNCOMMITTED = 'read_uncommitted'
     READ_COMMITTED = 'read_committed'
     REPEATABLE_READ = 'repeatable_read'
     SERIALIZABLE = 'serializable'
-
-
-class Session(MutableMapping):
-    def __init__(self, transaction_factory: TransactionFactory, isolation_level: IsolationLevel):
-        self.transaction_factory = transaction_factory
-        self.transaction = self.create_transaction(isolation_level=isolation_level)
-
-    def __getitem__(self, item):
-        return self.transaction[item]
-
-    def __setitem__(self, key, value):
-        self.transaction[key] = value
-
-    def __delitem__(self, key):
-        del self.transaction[key]
-
-    def __contains__(self, item):
-        return item in self.transaction
-
-    def __iter__(self):
-        return iter(self.transaction)
-
-    def __len__(self):
-        return len(self.transaction)
-
-    def set_isolation_level(self, isolation_level: IsolationLevel):
-        self.transaction.set_isolation_level(isolation_level=isolation_level)
-
-    def create_transaction(self, isolation_level: IsolationLevel) -> Transaction:
-        return self.transaction_factory.create_transaction(isolation_level=isolation_level)
-
-    def start(self, isolation_level: IsolationLevel):
-        self.journal_repository.create_uncommitted_journal(transaction=self)
-
-    def end(self):
-        self.journal_repository.delete_uncommitted_journal(transaction=self)
 
 
 class Transaction(abc.ABC, MutableMapping):
@@ -244,4 +207,10 @@ class Transaction(abc.ABC, MutableMapping):
 class TransactionFactory(abc.ABC):
     @abc.abstractmethod
     def create_transaction(self, isolation_level: IsolationLevel) -> Transaction:
+        ...
+
+
+class JournalRepositoryFactory(abc.ABC):
+    @abc.abstractmethod
+    def get_journal_repository(self) -> JournalRepository:
         ...

@@ -1,7 +1,7 @@
 import abc
 
 from src.exceptions import SerializationError
-from src.generics.journals import CompositeJournal
+from src.domain.journals import CompositeJournal
 from src.domain.core import Void, Journal, JournalRepository, Transaction
 
 

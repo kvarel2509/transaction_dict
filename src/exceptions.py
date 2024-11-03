@@ -6,6 +6,10 @@ class TransactionException(TransactionDictException):
     pass
 
 
+class TransactionLevelIsNotImplemented(TransactionDictException):
+    pass
+
+
 class AccessProtectorException(TransactionException):
     pass
 

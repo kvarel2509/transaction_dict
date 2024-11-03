@@ -1,7 +1,7 @@
 from typing import Hashable, Any
 
 from src.exceptions import RepositoryError
-from src.generics.journals import LeafJournal, CompositeJournal, MutableJournal
+from src.domain.journals import LeafJournal, CompositeJournal, MutableJournal
 from src.domain.core import Journal, UncommittedRepository, Transaction
 
 

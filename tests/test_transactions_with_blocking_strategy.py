@@ -1,10 +1,10 @@
 from unittest import TestCase
 
+from src.domain.transactions.lock_strategy import AccessProtector
 from src.exceptions import AccessError
 from src.factory import InMemoryJournalRepositoryFactory, LockStrategyTransactionFactory
 from src.domain.core import IsolationLevel
 from src.entrypoints.locallib.transaction_dict import TransactionDict
-from src.transactions.lock_strategy import AccessProtector
 from tests.generic import TransactionTestsMixin
 
 factory = InMemoryJournalRepositoryFactory()
