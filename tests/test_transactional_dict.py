@@ -2,7 +2,7 @@ import itertools
 from unittest import TestCase
 
 from src.factory import InMemoryJournalRepositoryFactory, MultiVersionStrategyTransactionFactory
-from src.model import TransactionDict
+from src.entrypoints.locallib.transaction_dict import TransactionDict
 
 factory = InMemoryJournalRepositoryFactory()
 

@@ -1,8 +1,8 @@
 from typing import Hashable, Any
 
 from src.exceptions import RepositoryError
-from src.model import UncommittedRepository, Transaction, MutableJournal, Journal, CompositeJournal, \
-    LeafJournal
+from src.domain.journals import LeafJournal, CompositeJournal, MutableJournal
+from src.domain.core import Journal, UncommittedRepository, Transaction
 
 
 class InMemoryUncommittedRepository(UncommittedRepository):

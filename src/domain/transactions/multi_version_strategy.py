@@ -1,7 +1,8 @@
 import abc
 
 from src.exceptions import SerializationError
-from src.model import Transaction, JournalRepository, CompositeJournal, Journal, Void
+from src.domain.journals import CompositeJournal
+from src.domain.core import Void, Journal, JournalRepository, Transaction
 
 
 class MultiVersionStrategyTransaction(Transaction, abc.ABC):

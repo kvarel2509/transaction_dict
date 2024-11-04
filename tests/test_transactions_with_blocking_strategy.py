@@ -1,9 +1,10 @@
 from unittest import TestCase
 
+from src.domain.transactions.lock_strategy import AccessProtector
 from src.exceptions import AccessError
 from src.factory import InMemoryJournalRepositoryFactory, LockStrategyTransactionFactory
-from src.model import TransactionDict, IsolationLevel
-from src.transactions.lock_strategy import AccessProtector
+from src.domain.core import IsolationLevel
+from src.entrypoints.locallib.transaction_dict import TransactionDict
 from tests.generic import TransactionTestsMixin
 
 factory = InMemoryJournalRepositoryFactory()
@@ -214,6 +215,11 @@ class RepeatableReadTransactionTestCase(LostUpdateTestCase,
         second_read = len(self.transaction1)
         self.assertEqual(second_read, first_read + 1)
 
+    def test_can_read_actual_value_after_commit_other_transaction(self):
+        self.transaction2[self.key1] = self.value3
+        self.transaction2.commit()
+        self.assertEqual(self.transaction1[self.key1], self.value3)
+
 
 class SerializableTransactionTestCase(LostUpdateTestCase,
                                       NonRepeatableReadTestCase,
@@ -232,7 +238,7 @@ class SerializableTransactionTestCase(LostUpdateTestCase,
             self.transaction2[self.key2] = self.value2
 
     def test_cannot_occur_phantoms_read_when_write_new_key_after_full_iter(self):
-        first_read = list(self.transaction1)
+        _ = list(self.transaction1)
         with self.assertRaises(AccessError):
             self.transaction2[self.key3] = self.value3
 
@@ -252,3 +258,8 @@ class SerializableTransactionTestCase(LostUpdateTestCase,
         _ = next(it)
         with self.assertRaises(AccessError):
             self.transaction2[self.key2] = self.value2
+
+    def test_can_read_actual_value_after_commit_other_transaction(self):
+        self.transaction2[self.key1] = self.value3
+        self.transaction2.commit()
+        self.assertEqual(self.transaction1[self.key1], self.value3)

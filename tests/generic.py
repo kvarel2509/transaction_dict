@@ -1,6 +1,7 @@
 import abc
 
-from src.model import TransactionDict, IsolationLevel
+from src.domain.core import IsolationLevel
+from src.entrypoints.locallib.transaction_dict import TransactionDict
 
 
 class TransactionTestsMixin(abc.ABC):

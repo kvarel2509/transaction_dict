@@ -6,6 +6,10 @@ class TransactionException(TransactionDictException):
     pass
 
 
+class TransactionLevelIsNotImplemented(TransactionDictException):
+    pass
+
+
 class AccessProtectorException(TransactionException):
     pass
 
@@ -19,4 +23,8 @@ class SerializationError(TransactionException):
 
 
 class RepositoryError(TransactionDictException):
+    pass
+
+
+class SessionError(TransactionDictException):
     pass

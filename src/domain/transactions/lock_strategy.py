@@ -2,7 +2,8 @@ import abc
 from typing import Hashable
 
 from src.exceptions import AccessError
-from src.model import Transaction, JournalRepository, CompositeJournal
+from src.domain.journals import CompositeJournal
+from src.domain.core import JournalRepository, Transaction
 
 
 class AnyKey:

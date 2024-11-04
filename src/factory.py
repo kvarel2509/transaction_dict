@@ -1,18 +1,11 @@
-import abc
-
-from src.journals.committed_pools import InMemoryCommittedRepository
-from src.journals.uncommitted_pools import InMemoryUncommittedRepository
-from src.model import JournalRepository, Transaction, IsolationLevel, TransactionFactory
-from src.transactions.lock_strategy import ReadUncommittedLockStrategyTransaction, ReadCommittedLockStrategyTransaction, \
-    RepeatableReadLockStrategyTransaction, SerializableLockStrategyTransaction, AccessProtector
-from src.transactions.multi_version_strategy import ReadCommittedMultiVersionStrategyTransaction, \
+from src.adapters.repositories.committed_repositories import InMemoryCommittedRepository
+from src.adapters.repositories.uncommitted_repositories import InMemoryUncommittedRepository
+from src.exceptions import TransactionLevelIsNotImplemented
+from src.domain.core import JournalRepository, IsolationLevel, Transaction, TransactionFactory, JournalRepositoryFactory
+from src.domain.transactions.lock_strategy import AccessProtector, ReadUncommittedLockStrategyTransaction, \
+    ReadCommittedLockStrategyTransaction, RepeatableReadLockStrategyTransaction, SerializableLockStrategyTransaction
+from src.domain.transactions.multi_version_strategy import ReadCommittedMultiVersionStrategyTransaction, \
     RepeatableReadMultiVersionStrategyTransaction, SerializableMultiVersionStrategyTransaction
-
-
-class JournalRepositoryFactory(abc.ABC):
-    @abc.abstractmethod
-    def get_journal_repository(self) -> JournalRepository:
-        ...
 
 
 class InMemoryJournalRepositoryFactory(JournalRepositoryFactory):
@@ -51,7 +44,7 @@ class LockStrategyTransactionFactory(TransactionFactory):
                     access_protector=self._access_protector,
                 )
             case _:
-                raise NotImplementedError()
+                raise TransactionLevelIsNotImplemented()
 
 
 class MultiVersionStrategyTransactionFactory(TransactionFactory):
@@ -73,4 +66,4 @@ class MultiVersionStrategyTransactionFactory(TransactionFactory):
                     journal_repository=self._journal_repository,
                 )
             case _:
-                raise NotImplementedError()
+                raise TransactionLevelIsNotImplemented()

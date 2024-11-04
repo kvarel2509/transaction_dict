@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import bisect
 
-from src.model import CommittedRepository, Counter, CommittedItem, Journal, CompositeJournal
+from src.domain.journals import CompositeJournal
+from src.domain.core import Journal, CommittedItem, Counter, CommittedRepository
 
 
 class InMemoryCommittedRepository(CommittedRepository):
