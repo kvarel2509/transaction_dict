@@ -1,7 +1,8 @@
 from src.adapters.repositories.committed_repositories import InMemoryCommittedRepository
 from src.adapters.repositories.uncommitted_repositories import InMemoryUncommittedRepository
 from src.exceptions import TransactionLevelIsNotImplemented
-from src.domain.core import JournalRepository, IsolationLevel, Transaction, TransactionFactory, JournalRepositoryFactory
+from src.domain.core import JournalRepository, IsolationLevel, BaseTransaction, TransactionFactory, \
+    JournalRepositoryFactory, Transaction
 from src.domain.transactions.lock_strategy import AccessProtector, ReadUncommittedLockStrategyTransaction, \
     ReadCommittedLockStrategyTransaction, RepeatableReadLockStrategyTransaction, SerializableLockStrategyTransaction
 from src.domain.transactions.multi_version_strategy import ReadCommittedMultiVersionStrategyTransaction, \
@@ -51,7 +52,7 @@ class MultiVersionStrategyTransactionFactory(TransactionFactory):
     def __init__(self, journal_repository: JournalRepository):
         self._journal_repository = journal_repository
 
-    def create_transaction(self, isolation_level: IsolationLevel) -> Transaction:
+    def create_transaction(self, isolation_level: IsolationLevel) -> BaseTransaction:
         match isolation_level:
             case IsolationLevel.READ_COMMITTED:
                 return ReadCommittedMultiVersionStrategyTransaction(

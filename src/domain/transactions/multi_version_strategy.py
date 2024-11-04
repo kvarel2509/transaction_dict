@@ -2,10 +2,10 @@ import abc
 
 from src.exceptions import SerializationError
 from src.domain.journals import CompositeJournal
-from src.domain.core import Void, Journal, JournalRepository, Transaction
+from src.domain.core import Void, Journal, JournalRepository, BaseTransaction
 
 
-class MultiVersionStrategyTransaction(Transaction, abc.ABC):
+class MultiVersionStrategyTransaction(BaseTransaction, abc.ABC):
     target_offset: int
 
     def __init__(self, journal_repository: JournalRepository):

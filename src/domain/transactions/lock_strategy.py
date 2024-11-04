@@ -3,14 +3,42 @@ from typing import Hashable
 
 from src.exceptions import AccessError
 from src.domain.journals import CompositeJournal
-from src.domain.core import JournalRepository, Transaction
+from src.domain.core import JournalRepository, Transaction, BaseTransaction
 
 
 class AnyKey:
     pass
 
 
-class AccessProtector:
+class AccessProtector(abc.ABC):
+    @abc.abstractmethod
+    def add_key_lock(self, transaction: Transaction, key: Hashable) -> None:
+        ...
+
+    @abc.abstractmethod
+    def add_full_lock(self, transaction: Transaction) -> None:
+        ...
+
+    @abc.abstractmethod
+    def clear_locks_by_transaction(self, transaction: Transaction) -> None:
+        ...
+
+
+class AccessProtectorDecorator(AccessProtector):
+    def __init__(self, access_protector: AccessProtector) -> None:
+        self.access_protector = access_protector
+
+    def add_key_lock(self, transaction: Transaction, key: Hashable) -> None:
+        self.access_protector.add_key_lock(transaction=transaction, key=key)
+
+    def add_full_lock(self, transaction: Transaction):
+        self.access_protector.add_full_lock(transaction=transaction)
+
+    def clear_locks_by_transaction(self, transaction: Transaction):
+        self.access_protector.clear_locks_by_transaction(transaction=transaction)
+
+
+class BaseAccessProtector(AccessProtector):
     def __init__(self):
         self.locks: dict[Hashable, Transaction] = {}
         self.any_key = AnyKey()
@@ -28,12 +56,6 @@ class AccessProtector:
             raise AccessError()
         self.locks[self.any_key] = transaction
 
-    def del_key_lock(self, key: Hashable) -> None:
-        del self.locks[key]
-
-    def del_full_lock(self) -> None:
-        del self.locks[self.any_key]
-
     def clear_locks_by_transaction(self, transaction: Transaction) -> None:
         self.locks = {
             key: locker
@@ -42,7 +64,7 @@ class AccessProtector:
         }
 
 
-class LockStrategyTransaction(Transaction, abc.ABC):
+class LockStrategyTransaction(BaseTransaction, abc.ABC):
     def __init__(self, journal_repository: JournalRepository, access_protector: AccessProtector):
         self.journal_repository = journal_repository
         self.access_protector = access_protector

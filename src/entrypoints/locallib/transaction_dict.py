@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import MutableMapping
 
-from src.domain.core import IsolationLevel, Transaction, TransactionFactory
+from src.domain.core import IsolationLevel, TransactionFactory, Transaction
 
 
 class TransactionDict(MutableMapping):

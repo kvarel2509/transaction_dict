@@ -140,6 +140,24 @@ class IsolationLevel(enum.Enum):
 
 
 class Transaction(abc.ABC, MutableMapping):
+    @abc.abstractmethod
+    def commit(self):
+        ...
+
+    @abc.abstractmethod
+    def rollback(self):
+        ...
+
+    @abc.abstractmethod
+    def start(self):
+        ...
+
+    @abc.abstractmethod
+    def end(self):
+        ...
+
+
+class BaseTransaction(Transaction, abc.ABC):
     journal_repository: JournalRepository
 
     def __getitem__(self, item):
@@ -202,6 +220,14 @@ class Transaction(abc.ABC, MutableMapping):
 
     def end(self):
         self.journal_repository.delete_uncommitted_journal(transaction=self)
+
+
+class TransactionDecorator(Transaction, abc.ABC):
+    def __init__(self, transaction: Transaction):
+        self.transaction = transaction
+
+    def __getattr__(self, item):
+        return getattr(self.transaction, item)
 
 
 class TransactionFactory(abc.ABC):
